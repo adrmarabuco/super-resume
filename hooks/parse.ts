@@ -21,6 +21,7 @@ type Line = {
   gitBranch?: string
   summary?: string
   customTitle?: string
+  aiTitle?: string
   message?: {
     id?: string
     role?: string
@@ -121,7 +122,7 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
 // Rows Claude Code writes as user messages that the person never typed.
 const isNoise = (text: string): boolean =>
-  /^\s*(<command-|<local-command|<system-reminder|Caveat:|\[Request interrupted)/.test(
+  /^\s*(<command-|<local-command|<system-reminder|<bash-(input|stdout|stderr)|<task-notification|Caveat:|\[Request interrupted)/.test(
     text,
   )
 
@@ -138,6 +139,10 @@ const oneLine = (text: string, max: number): string => {
   const flat = text.replace(/\s+/g, ' ').trim()
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
+
+// The last `max` characters, from a word's start, marked … when cut.
+const tailOf = (text: string, max: number): string =>
+  text.length > max ? `…${text.slice(-max).replace(/^\S*\s*/, '')}` : text
 
 /**
  * Builds the report of one transcript from its JSONL text. `isPartial` says
@@ -163,6 +168,7 @@ export const parseTranscript = (
   let toolCalls = 0
   let contextTokens = 0
   let parent = ''
+  let aiTitle = ''
   let inheritedFirst = ''
   const files = new Map<string, FileDiff>()
   const usageById = new Map<string, Usage>()
@@ -185,6 +191,7 @@ export const parseTranscript = (
 
     if (line.type === 'summary' && line.summary) title = line.summary
     if (line.type === 'custom-title' && line.customTitle) title = line.customTitle
+    if (line.type === 'ai-title' && line.aiTitle) aiTitle = line.aiTitle
     if (line.isSidechain) continue
     // A fork starts as a copy of its parent's lines, each marked with
     // `forkedFrom`. Those say where it came from and where it stood, but the
@@ -257,11 +264,12 @@ export const parseTranscript = (
 
   return {
     id,
-    title: oneLine(title || firstPrompt || inheritedFirst || '(no prompt)', 80),
+    title: oneLine(title || firstPrompt || inheritedFirst || aiTitle.replace(/-/g, ' ') || '(no prompt)', 80),
     parent,
-    firstPrompt: oneLine(firstPrompt, 300),
-    lastPrompt: oneLine(lastPrompt, 300),
-    lastReply: lastReply.trim().slice(-600),
+    firstPrompt: oneLine(firstPrompt, 800),
+    lastPrompt: oneLine(lastPrompt, 800),
+    // the reply's end, enough for the report to scroll through; cut at a word
+    lastReply: tailOf(lastReply.trim(), 1600),
     startedAt,
     endedAt,
     durationMs: Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0,
@@ -337,3 +345,61 @@ export const modelName = (id: string): string => {
   const name = `${family[0]!.toUpperCase()}${family.slice(1)}${version.length ? ` ${version.join('.')}` : ''}`
   return is1m ? `${name} 1M` : name
 }
+
+/**
+ * `text` word-wrapped into at most `maxLines` lines of `width` cells, the
+ * markdown marks (`**`, backticks, `#` heads) dropped. Too long, it keeps the
+ * start (`'start'`) or the end (`'end'`, where a reply stopped) and marks the
+ * cut with `…`. The terminal draws each line as given: nothing spills.
+ */
+export const wrapText = (
+  text: string,
+  width: number,
+  maxLines: number,
+  keep: 'start' | 'end' = 'start',
+): string[] => {
+  const flat = text
+    .replace(/\*\*|__|`/g, '')
+    .replace(/^#+\s*/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (flat === '' || width < 4 || maxLines < 1) return flat === '' ? [] : [fit(flat, Math.max(1, width)).trimEnd()]
+  const lines: string[] = []
+  let current = ''
+  for (const word of flat.split(' ')) {
+    let rest = word
+    while (rest.length > width) {
+      // a word longer than a line (a path, a URL) is cut across lines
+      const room = width - (current === '' ? 0 : current.length + 1)
+      if (room < 8 && current !== '') {
+        lines.push(current)
+        current = ''
+        continue
+      }
+      lines.push(current === '' ? rest.slice(0, room) : `${current} ${rest.slice(0, room)}`)
+      current = ''
+      rest = rest.slice(room)
+    }
+    if (current === '') current = rest
+    else if (current.length + 1 + rest.length <= width) current = `${current} ${rest}`
+    else {
+      lines.push(current)
+      current = rest
+    }
+  }
+  if (current !== '') lines.push(current)
+  if (lines.length <= maxLines) return lines
+  if (keep === 'end') {
+    const kept = lines.slice(-maxLines)
+    kept[0] = `…${kept[0]!.slice(kept[0]!.length >= width ? 1 : 0)}`
+    return kept
+  }
+  const kept = lines.slice(0, maxLines)
+  const last = kept[maxLines - 1]!
+  kept[maxLines - 1] = `${last.length >= width ? last.slice(0, -1) : last}…`
+  return kept
+}
+
+/** `text` in at most `width` cells, cut at the start with `…` (a path's end matters). */
+export const fitStart = (text: string, width: number): string =>
+  text.length > width ? `…${text.slice(text.length - Math.max(0, width - 1))}` : text

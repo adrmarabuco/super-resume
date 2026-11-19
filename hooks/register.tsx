@@ -7,6 +7,7 @@ import {
   bar,
   duration,
   fit,
+  fitStart,
   lastPart,
   levelColor,
   modelName,
@@ -14,6 +15,7 @@ import {
   parseTranscript,
   projectFolderName,
   tokens,
+  wrapText,
 } from './parse'
 
 const PANE = 'super-resume'
@@ -21,6 +23,9 @@ const TITLE = 'Super Resume'
 
 const scopeAtom = atom({ plugin: 'super-resume', key: 'scope' } as const, 'project' as Scope)
 const selectedAtom = atom({ plugin: 'super-resume', key: 'selected' } as const, '')
+// How far the report is scrolled, and for which session: picking another
+// session starts its report at the top.
+const reportTopAtom = atom({ plugin: 'super-resume', key: 'reportTop' } as const, { id: '', top: 0 })
 // Change the tag when SessionReport's fields change: it declines what an
 // earlier version stored, which outlives a reload.
 const listingAtom = atom(
@@ -266,9 +271,22 @@ const view = {
   start: 0,
   listColumns: 0,
   listRowEnd: 0,
+  // The report's session, its rows that fit, and the furthest it scrolls.
+  reportId: '',
+  reportSlots: 1,
+  reportMax: 0,
 }
 // The element the focus ring last landed on in the pane.
 let ringAt = ''
+
+// Scroll the report by `delta` rows (±Infinity: top/bottom).
+async function scrollReport($: Engine, delta: number): Promise<void> {
+  await update($, reportTopAtom, at => {
+    const from = at.id === view.reportId ? at.top : 0
+    const top = Math.max(0, Math.min(view.reportMax, from + delta))
+    return { id: view.reportId, top: Number.isFinite(top) ? top : 0 }
+  })
+}
 
 // Move the selection by `delta` rows (±Infinity: first/last), and the focus
 // ring with it so Enter acts on the row the ▶ points at.
@@ -283,9 +301,6 @@ async function move($: Engine, delta: number): Promise<void> {
   if (to !== from) await update($, selectedAtom, () => target.id)
   await $.ui.focus({ requestId: PANE, key: `session:${target.id}` }).catch(() => undefined)
 }
-
-// The rows a page key moves: the session rows the window shows.
-const pageRows = (): number => Math.max(1, view.ids.length - 1)
 
 const copyCommand = ($: Engine, session: SessionReport, surface: RenderSurface) =>
   void $.ui
@@ -325,7 +340,7 @@ export const register: Register = on => {
   // The arrows, page keys and Home/End scroll the pane's body while its tree
   // is taller than the room; the list draws only the rows that fit, so here a
   // key moves the selection instead, and the body stays put. A wheel tick over
-  // the list moves it a row; over the report it scrolls as usual.
+  // the list moves it a row; over the report it scrolls the report, as PgUp/PgDn do.
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (e.origin.kind !== 'person') return next(e)
     let delta: number
@@ -334,10 +349,15 @@ export const register: Register = on => {
         e.pointer.column >= 0 &&
         e.pointer.column < view.listColumns &&
         e.pointer.row < view.listRowEnd
-      if (!overList) return next(e)
+      if (!overList) {
+        void scrollReport($, e.by)
+        return {}
+      }
       delta = Math.sign(e.by)
     } else if (Math.abs(e.by) === e.bodyRows) {
-      delta = Math.sign(e.by) * pageRows()
+      // PgUp/PgDn page the report, leaving a row of the last page in view
+      void scrollReport($, Math.sign(e.by) * Math.max(1, view.reportSlots - 1))
+      return {}
     } else if (e.contentRows > 0 && Math.abs(e.by) >= e.contentRows) {
       delta = Math.sign(e.by) * Infinity
     } else {
@@ -384,6 +404,7 @@ export const register: Register = on => {
     const listing = await read($, listingAtom)
     const scope = await read($, scopeAtom)
     const selectedId = await read($, selectedAtom)
+    const reportTopAt = await read($, reportTopAtom)
     const thisSession = await $.session.id()
     const now = Date.now()
     const columns = e.props.bodyColumns
@@ -395,12 +416,12 @@ export const register: Register = on => {
     const selectedIndex = Math.max(0, sessions.findIndex(session => session.id === selectedId))
     const selected = sessions[selectedIndex]
 
-    // Rows: header 1, footer 1, and in split each column's border 2 + its
-    // heading 1. Stacked: a hint row when docked, the list box, then the report.
+    // Rows: header 1 + a blank, a blank + footer 1, and in split each column's border 2 + its
+    // heading 1 + a blank. Stacked: a hint row when docked, the list box, then the report.
     const hintRows = isSplit ? 0 : 1
-    const boxRows = Math.max(8, bodyRows - 2 - hintRows)
-    const listBoxRows = isSplit ? boxRows : Math.min(boxRows - 6, Math.max(5, Math.min(14, sessions.length + 3)))
-    const listSlots = Math.max(1, listBoxRows - 3)
+    const boxRows = Math.max(8, bodyRows - 4 - hintRows)
+    const listBoxRows = isSplit ? boxRows : Math.min(boxRows - 6, Math.max(6, Math.min(15, sessions.length + 4)))
+    const listSlots = Math.max(1, listBoxRows - 4)
     const reportBoxRows = isSplit ? boxRows : Math.max(6, boxRows - listBoxRows)
 
     const listOuter = isSplit ? Math.floor(columns / 2) : columns
@@ -422,7 +443,7 @@ export const register: Register = on => {
     view.start = start
     view.listColumns = listOuter
     // Rows from the body's top through the list box's bottom.
-    view.listRowEnd = 1 + hintRows + listBoxRows
+    view.listRowEnd = 2 + hintRows + listBoxRows
 
     const scopeButton = (value: Scope, hotkey: string, label: string) => (
       <Button
@@ -484,6 +505,7 @@ export const register: Register = on => {
         overflow="hidden"
       >
         <Text bold color="subtle">Sessions</Text>
+        <Text> </Text>
         {sessions.length === 0 && (
           <Text dimColor>{listing.error || (listing.isLoading ? 'Reading…' : 'No sessions.')}</Text>
         )}
@@ -497,6 +519,20 @@ export const register: Register = on => {
     const rule = <Text dimColor>{'─'.repeat(reportInner)}</Text>
     const SEP = <Text dimColor> | </Text>
     const heading = (text: string) => <Text bold color="subtle">{text}</Text>
+    // `user  › ` / `agent › ` then the text, wrapped by hand to the column's
+    // width (the terminal's own wrap under maxLines spilled over the rows
+    // below), the lines after the first indented under it.
+    const said = (who: string, color: string, text: string, lines: number, keep: 'start' | 'end') => {
+      const prefix = `${who.padEnd(5)} › `
+      const wrapped = wrapText(text, reportInner - prefix.length, lines, keep)
+      if (wrapped.length === 0) wrapped.push('—')
+      return wrapped.map((line, i) => (
+        <Text key={`${who}:${i}`} wrap="truncate-end">
+          <Text color={color}>{i === 0 ? prefix : ' '.repeat(prefix.length)}</Text>
+          {line}
+        </Text>
+      ))
+    }
     // `Tokens 4.3M | In 210k | Out 95k | Cache 4.0M`; an agents line puts its
     // count first and the total after it.
     const tokenLine = (label: string, usage: SessionReport['usage'], isPartial: boolean, totalLabel = '') => {
@@ -527,37 +563,41 @@ export const register: Register = on => {
         .filter(([, node]) => node.parent === session.id)
         .sort(([, a], [, b]) => b.endedAt.localeCompare(a.endedAt))
       const parent = listing.tree[session.parent]
-      return (
-        <>
-          {session.parent !== '' && (
-            <Text wrap="truncate-end">
-              <Text dimColor>↳ </Text>
-              <Text>{nameOf(session.parent)}</Text>
-              {parent ? (
-                <Text>{SEP}<Text dimColor>{ago(parent.endedAt, now)} ago</Text></Text>
-              ) : (
-                <Text>{SEP}<Text dimColor>{short(session.parent)} gone</Text></Text>
-              )}
-            </Text>
-          )}
-          {chain.length > 1 && (
-            <Text wrap="truncate-end">
-              <Text dimColor>Chain </Text>
-              <Text dimColor>{chain.map(id => fit(nameOf(id), 20).trimEnd()).join(' › ')} › </Text>
-              <Text>this</Text>
-            </Text>
-          )}
-          {forks.length > 0 && (
-            <Text wrap="truncate-end">
-              <Text dimColor>Forks </Text>
-              <Text>{forks.length}</Text>
-              {forks.slice(0, 3).map(([id, node]) => (
-                <Text key={`fork:${id}`}>{SEP}<Text dimColor>{fit(node.title, 28).trimEnd()}</Text></Text>
-              ))}
-            </Text>
-          )}
-        </>
-      )
+      const out = []
+      if (session.parent !== '') {
+        out.push(
+          <Text key="tree:parent" wrap="truncate-end">
+            <Text dimColor>↳ </Text>
+            <Text>{nameOf(session.parent)}</Text>
+            {parent ? (
+              <Text>{SEP}<Text dimColor>{ago(parent.endedAt, now)} ago</Text></Text>
+            ) : (
+              <Text>{SEP}<Text dimColor>{short(session.parent)} gone</Text></Text>
+            )}
+          </Text>,
+        )
+      }
+      if (chain.length > 1) {
+        out.push(
+          <Text key="tree:chain" wrap="truncate-end">
+            <Text dimColor>Chain </Text>
+            <Text dimColor>{chain.map(id => fit(nameOf(id), 20).trimEnd()).join(' › ')} › </Text>
+            <Text>this</Text>
+          </Text>,
+        )
+      }
+      if (forks.length > 0) {
+        out.push(
+          <Text key="tree:forks" wrap="truncate-end">
+            <Text dimColor>Forks </Text>
+            <Text>{forks.length}</Text>
+            {forks.slice(0, 3).map(([id, node]) => (
+              <Text key={`fork:${id}`}>{SEP}<Text dimColor>{fit(node.title, 28).trimEnd()}</Text></Text>
+            ))}
+          </Text>,
+        )
+      }
+      return out
     }
     const plusMinus = (added: number, removed: number) => (
       <Text>
@@ -569,6 +609,109 @@ export const register: Register = on => {
     const relative = (file: string, cwd: string) =>
       file.toLowerCase().startsWith(cwd.toLowerCase()) ? file.slice(cwd.length + 1) : file
 
+    // The report as a list of one-row lines, so it scrolls a row at a time:
+    // the wheel over it or j/k move it, and a dim line at either edge says
+    // how many rows are out of view.
+    const lines: ReturnType<typeof Text>[] = []
+    const blank = (key: string) => <Text key={key}> </Text>
+    if (!selected) lines.push(<Text key="none" dimColor>No session selected.</Text>)
+    if (selected) {
+      const ratio = selected.contextTokens / selected.contextWindow
+      const cells = bar(ratio, 10)
+      const atLeast = selected.isPartial ? '≥' : ''
+      lines.push(
+        <Text key="title" bold color="claude" wrap="truncate-end">
+          {selected.parent !== '' && <Text dimColor>↳ </Text>}
+          {selected.title}
+        </Text>,
+        <Text key="meta" wrap="truncate-end">
+          <Text>{lastPart(selected.cwd)}</Text>
+          {selected.branch !== '' && <Text>{SEP}<Text color="merged">⎇ {selected.branch}</Text></Text>}
+          {selected.model !== '' && <Text>{SEP}<Text color="suggestion">{modelName(selected.model)}</Text></Text>}
+        </Text>,
+        ...treeLines(selected),
+        blank('b1'),
+        <Text key="ctx" wrap="truncate-end">
+          <Text dimColor>Ctx </Text>
+          <Text color={levelColor(ratio)}>{cells.on}</Text>
+          <Text dimColor>{cells.off}</Text>
+          <Text> {Math.round(ratio * 100)}% </Text>
+          <Text dimColor>{tokens(selected.contextTokens)}</Text>
+          {SEP}<Text dimColor>Turns </Text><Text>{atLeast}{selected.turns}</Text>
+          {SEP}<Text dimColor>Tools </Text><Text>{atLeast}{selected.toolCalls}</Text>
+          {SEP}<Text dimColor>Files </Text><Text>{selected.files.length}</Text>
+        </Text>,
+        <Box key="tokens">{tokenLine('Tokens', selected.usage, selected.isPartial)}</Box>,
+      )
+      if (selected.agents.count > 0) {
+        lines.push(
+          <Box key="agents">
+            {tokenLine(`Agents ${selected.agents.count}`, selected.agents.usage, selected.agents.isPartial, 'Tokens ')}
+          </Box>,
+        )
+      }
+      lines.push(
+        <Text key="time" wrap="truncate-end">
+          <Text dimColor>Started </Text><Text>{ago(selected.startedAt, now)} ago</Text>
+          {SEP}<Text dimColor>Ended </Text><Text>{ago(selected.endedAt, now)} ago</Text>
+          {SEP}<Text dimColor>Ran </Text><Text>{duration(selected.durationMs)}</Text>
+        </Text>,
+        blank('b2'),
+        <Box key="rule">{rule}</Box>,
+        blank('b3'),
+        <Box key="h:last">{heading('Last')}</Box>,
+        ...said('user', 'suggestion', selected.lastPrompt, 6, 'start'),
+        blank('b4'),
+        ...said('agent', 'claude', selected.lastReply, 12, 'end'),
+      )
+      if (selected.firstPrompt !== '' && selected.firstPrompt !== selected.lastPrompt) {
+        lines.push(
+          blank('b5'),
+          <Box key="h:first">{heading('First')}</Box>,
+          ...wrapText(selected.firstPrompt, reportInner, 4).map((text, i) => (
+            <Text key={`first:${i}`} dimColor wrap="truncate-end">{text}</Text>
+          )),
+        )
+      }
+      if (selected.files.length > 0) {
+        lines.push(
+          blank('b6'),
+          <Box key="h:diff">{heading('Diff')}</Box>,
+          <Text key="diff" wrap="truncate-end">
+            {plusMinus(selected.added, selected.removed)}
+            <Text dimColor>  {selected.files.length} {selected.files.length === 1 ? 'file' : 'files'}</Text>
+          </Text>,
+          blank('b7'),
+          <Box key="h:files">{heading('Files')}</Box>,
+          ...selected.files.slice(0, 30).map(file => {
+            const counts = `+${file.added} -${file.removed}  `
+            return (
+              <Text key={`file:${file.path}`} wrap="truncate-end">
+                {plusMinus(file.added, file.removed)}
+                <Text dimColor>  {fitStart(relative(file.path, selected.cwd), reportInner - counts.length)}</Text>
+              </Text>
+            )
+          }),
+        )
+        if (selected.files.length > 30) {
+          lines.push(<Text key="files:more" dimColor>+{selected.files.length - 30} more</Text>)
+        }
+      }
+    }
+
+    // Rows inside the border; when the report is taller, the edge rows give
+    // way to the ↑/↓ counts.
+    const reportRows = Math.max(1, reportBoxRows - 2)
+    const reportFits = lines.length <= reportRows
+    const reportSlots = reportFits ? reportRows : Math.max(1, reportRows - 2)
+    const reportMax = Math.max(0, lines.length - reportSlots)
+    const reportTop = reportTopAt.id === (selected?.id ?? '') ? Math.min(reportTopAt.top, reportMax) : 0
+    view.reportId = selected?.id ?? ''
+    view.reportSlots = reportSlots
+    view.reportMax = reportMax
+    const reportAbove = reportTop
+    const reportBelow = lines.length - reportTop - reportSlots
+
     const report = (
       <Box
         flexDirection="column"
@@ -579,87 +722,20 @@ export const register: Register = on => {
         paddingX={1}
         overflow="hidden"
       >
-        {!selected && <Text dimColor>No session selected.</Text>}
-        {selected && (() => {
-          const ratio = selected.contextTokens / selected.contextWindow
-          const cells = bar(ratio, 10)
-          const atLeast = selected.isPartial ? '≥' : ''
-          return (
-            <>
-              <Text bold color="claude" wrap="truncate-end">
-                {selected.parent !== '' && <Text dimColor>↳ </Text>}
-                {selected.title}
-              </Text>
-              <Text wrap="truncate-end">
-                <Text>{lastPart(selected.cwd)}</Text>
-                {selected.branch !== '' && <Text>{SEP}<Text color="merged">⎇ {selected.branch}</Text></Text>}
-                {selected.model !== '' && <Text>{SEP}<Text color="suggestion">{modelName(selected.model)}</Text></Text>}
-              </Text>
-              {treeLines(selected)}
-              <Text wrap="truncate-end">
-                <Text dimColor>Ctx </Text>
-                <Text color={levelColor(ratio)}>{cells.on}</Text>
-                <Text dimColor>{cells.off}</Text>
-                <Text> {Math.round(ratio * 100)}% </Text>
-                <Text dimColor>{tokens(selected.contextTokens)}</Text>
-                {SEP}<Text dimColor>Turns </Text><Text>{atLeast}{selected.turns}</Text>
-                {SEP}<Text dimColor>Tools </Text><Text>{atLeast}{selected.toolCalls}</Text>
-                {SEP}<Text dimColor>Files </Text><Text>{selected.files.length}</Text>
-              </Text>
-              {tokenLine('Tokens', selected.usage, selected.isPartial)}
-              {selected.agents.count > 0 &&
-                tokenLine(`Agents ${selected.agents.count}`, selected.agents.usage, selected.agents.isPartial, 'Tokens ')}
-              <Text wrap="truncate-end">
-                <Text dimColor>Started </Text><Text>{ago(selected.startedAt, now)} ago</Text>
-                {SEP}<Text dimColor>Ended </Text><Text>{ago(selected.endedAt, now)} ago</Text>
-                {SEP}<Text dimColor>Ran </Text><Text>{duration(selected.durationMs)}</Text>
-              </Text>
-              {rule}
-              {heading('Last')}
-              <Text maxLines={3}>
-                <Text color="suggestion">user  › </Text>
-                {selected.lastPrompt.replace(/\s+/g, ' ') || '—'}
-              </Text>
-              <Text maxLines={isSplit ? 6 : 4}>
-                <Text color="claude">agent › </Text>
-                {selected.lastReply.replace(/\s+/g, ' ').slice(-600) || '—'}
-              </Text>
-              {selected.firstPrompt !== '' && selected.firstPrompt !== selected.lastPrompt && (
-                <>
-                  <Text> </Text>
-                  {heading('First')}
-                  <Text dimColor maxLines={2}>{selected.firstPrompt.replace(/\s+/g, ' ')}</Text>
-                </>
-              )}
-              {selected.files.length > 0 && (
-                <>
-                  <Text> </Text>
-                  {heading('Diff')}
-                  <Text>
-                    {plusMinus(selected.added, selected.removed)}
-                    <Text dimColor>  {selected.files.length} {selected.files.length === 1 ? 'file' : 'files'}</Text>
-                  </Text>
-                  <Text> </Text>
-                  {heading('Files')}
-                  {selected.files.slice(0, 6).map(file => (
-                    <Text key={`file:${file.path}`} wrap="truncate-start">
-                      {plusMinus(file.added, file.removed)}
-                      <Text dimColor>  {relative(file.path, selected.cwd)}</Text>
-                    </Text>
-                  ))}
-                  {selected.files.length > 6 && <Text dimColor>+{selected.files.length - 6} more</Text>}
-                </>
-              )}
-            </>
-          )
-        })()}
+        {!reportFits && (
+          <Text dimColor>{reportAbove > 0 ? `↑ ${reportAbove} more · PgUp` : ' '}</Text>
+        )}
+        {reportFits ? lines : lines.slice(reportTop, reportTop + reportSlots)}
+        {!reportFits && (
+          <Text dimColor>{reportBelow > 0 ? `↓ ${reportBelow} more · PgDn` : ' '}</Text>
+        )}
       </Box>
     )
 
     const footer = (
       <Box flexDirection="row" gap={2}>
         <Text dimColor wrap="truncate-end">
-          {isSplit ? '↑↓ move · PgUp/PgDn page · Home/End · Enter resume' : '↑↓ move · Enter resume'}
+          {isSplit ? '↑↓ move · Home/End · PgUp/PgDn report · Enter resume' : '↑↓ move · PgUp/PgDn report · Enter resume'}
         </Text>
         <Button
           key="copy-resume"
@@ -681,7 +757,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        {header}
+        <Box marginBottom={1}>{header}</Box>
         {!isSplit && (
           <Text dimColor wrap="truncate-end">
             {e.props.placement === 'dock'
@@ -693,7 +769,7 @@ export const register: Register = on => {
           {list}
           {report}
         </Box>
-        {footer}
+        <Box marginTop={1}>{footer}</Box>
       </Box>
     )
   })

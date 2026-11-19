@@ -31,7 +31,7 @@ Like `/resume`, you switch what is listed:
 | `r` | refresh |
 | `c` | copy `cd <project> && claude --resume <id>` for the selected session |
 
-↑/↓ move through the list (PgUp/PgDn a page, Home/End the ends) and the report follows; the list shows the rows that fit, with a count of those above and below. Enter resumes the session in this terminal (`/resume <id>`), as `/resume` does; a session of another project folder has its `cd … && claude --resume` command copied instead, since a running session cannot change folder. Esc closes the pane.
+↑/↓ move through the list (Home/End the ends) and the report follows; the list shows the rows that fit, with a count of those above and below. A report taller than its box scrolls: PgDn/PgUp move it a page, the mouse wheel over it a few rows. Enter resumes the session in this terminal (`/resume <id>`), as `/resume` does; a session of another project folder has its `cd … && claude --resume` command copied instead, since a running session cannot change folder. Esc closes the pane.
 
 ## Usage
 

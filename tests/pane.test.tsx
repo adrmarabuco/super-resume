@@ -397,7 +397,7 @@ const key = (by: number, bodyRows = 20, contentRows = 20) => ({
 
 test('arrow keys move the selection and the report instead of scrolling the pane', async ($, on) => {
   await openMany($, on, 30)
-  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  const ui = await $.ui.mount({ ...INLINE, props: { ...INLINE.props, scroll: { offset: 0, bodyRows: 30 } }, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /Reply of s00/ })).toBeDefined()
 
   await $.ui.scroll(key(1) as any)
@@ -557,4 +557,61 @@ test('a fork names its parent and chain, its parent counts its forks, and inheri
   expect(await ui.find({ type: 'Text', text: /^↳ Root work/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Chain/ })).toBeUndefined()
   await ui.unmount()
+})
+
+test('long text is wrapped to the report column, and noise or a missing title falls back cleanly', async ($, on) => {
+  const long = Array.from({ length: 120 }, (_, i) => `**word${i}** \`code\``).join(' ')
+  const T = [
+    line({ type: 'ai-title', aiTitle: 'fix-the-pane-layout' }),
+    line({ type: 'user', timestamp: '2026-11-18T10:00:00Z', cwd: ROOT, gitBranch: 'main', message: { role: 'user', content: '<bash-input> claude attach 7d5871ba</bash-input>' } }),
+    line({ type: 'assistant', timestamp: '2026-11-18T10:05:00Z', cwd: ROOT, gitBranch: 'main',
+      message: { id: 'a', role: 'assistant', model: 'claude-opus-5-5', usage: { input_tokens: 1 }, content: [{ type: 'text', text: long }] } }),
+  ].join('\n')
+  on('command.register', () => ({ value: { command: 'super-resume' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.id', () => ({ value: 'current' }))
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('fs.list', (_, e) => ({
+    value: posix(e.path) === `${BASE}/${FOLDER}` ? [{ name: 'aaa.jsonl', kind: 'file', size: 2000, mtimeMs: 2, isLink: false }] : [],
+  }))
+  on('fs.read', (_, e) => ({ value: posix(e.path).endsWith('/aaa.jsonl') ? T : '' }))
+
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'super-resume', args: 'project', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 160 } })
+  const ui = await $.ui.mount({ ...INLINE, props: { ...INLINE.props, scroll: { offset: 0, bodyRows: 40 } }, surface: 'terminal' })
+
+  // the <bash-input> row is noise: the title comes from the ai-title
+  expect(await ui.find({ type: 'Text', text: /fix the pane layout/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /bash-input/ })).toBeUndefined()
+  // the reply: its end, marked …, no markdown, 6 lines of at most the column's width (160/2 - 4)
+  const all = (await ui.findAll({ type: 'Text', text: /word\d+ code/ })).map((n: any) => String(n.text))
+  // nested Texts match too: keep the row-level ones (a prefix or the indent)
+  const replyLines = all.filter(t => /^(agent › |\s{8})/.test(t))
+  expect(replyLines.length).toBe(12)
+  expect(replyLines[0]).toMatch(/^agent › …/)
+  expect(replyLines.join(' ')).toContain('word119 code')
+  expect(replyLines.join(' ')).not.toMatch(/\*\*|`/)
+  for (const text of replyLines) expect(text.length).toBeLessThanOrEqual(76)
+  expect(await ui.find({ type: 'Text', text: /more · PgDn/ })).toBeUndefined()
+  await ui.unmount()
+
+  // shorter, the report scrolls: PgDn a page down, PgUp back, the wheel over it a few rows
+  const small = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  expect(await small.find({ type: 'Text', text: /^↓ \d+ more · PgDn$/ })).toBeDefined()
+  expect(await small.find({ type: 'Text', text: /more · PgUp/ })).toBeUndefined()
+  await $.ui.scroll(key(20) as any)
+  await settle()
+  // 14 rows inside the border, 12 once the edges count: a page is 11
+  expect(await small.find({ type: 'Text', text: /^↑ 11 more · PgUp$/ })).toBeDefined()
+  expect(await small.find({ type: 'Text', text: /Reply of|word\d+ code/ })).toBeDefined()
+  await $.ui.scroll(key(-20) as any)
+  await settle()
+  expect(await small.find({ type: 'Text', text: /more · PgUp/ })).toBeUndefined()
+  await $.ui.scroll({ ...key(3), pointer: { row: 5, column: 120 } } as any)
+  await settle()
+  expect(await small.find({ type: 'Text', text: /^↑ 3 more · PgUp$/ })).toBeDefined()
+  await small.unmount()
 })
