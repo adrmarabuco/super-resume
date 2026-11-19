@@ -1,0 +1,6 @@
+{
+  "name": "super-resume",
+  "description": "Super Resume: a visual /resume pane for Claude Code sessions.",
+  "owner": { "name": "Adriano Marabuco" },
+  "plugins": [{ "name": "super-resume", "source": "./" }]
+}
