@@ -4,6 +4,13 @@ A visual `/resume` for Claude Code. It opens a pane beside the chat that lists y
 
 `/resume` shows one line and a timestamp per session. When you work on several fronts at once, often without a branch per front, that is not enough to find your place. Super Resume reads the transcripts Claude Code already keeps in `~/.claude/projects/` (read-only) and turns each into a small report.
 
+**At a glance**
+- **Find your place**: the last prompt and reply (paragraphs and lists kept), the first prompt, and Claude's last recap of the session.
+- **Judge a session**: a grade from Flow, Autonomy and Delegation, plus Deliv, how much of what it edited is committed.
+- **See what happened**: rejections, interrupts and errors; subagents and background work; todos and tasks; plans and the files they touched; what git still holds uncommitted.
+- **Follow plans across sessions**: every plan joined to the sessions that wrote or read it, recovered from the transcript when its file is gone, and exportable into the project.
+- **Private and honest**: nothing leaves your machine and no model summarises anything. Every number comes from the transcripts and git. When Claude Code changes its transcript format, the score says it cannot judge (`?`) instead of reading the gap as a perfect session.
+
 ## What it shows
 
 **Session list (left)**
