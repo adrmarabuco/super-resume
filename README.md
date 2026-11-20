@@ -2,6 +2,8 @@
 
 A visual `/resume` for Claude Code. It opens a pane beside the chat that lists your past sessions on one side and shows a short report of the highlighted one on the other, so you can tell where a session stopped, and whether it holds what you are looking for, without opening it.
 
+![Super Resume: the session list on the left, the highlighted session's report on the right](assets/screenshot.png)
+
 `/resume` shows one line and a timestamp per session. When you work on several fronts at once, often without a branch per front, that is not enough to find your place. Super Resume reads the transcripts Claude Code already keeps in `~/.claude/projects/` (read-only) and turns each into a small report.
 
 **At a glance**
