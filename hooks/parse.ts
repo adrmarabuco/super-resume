@@ -391,6 +391,7 @@ export const parseTranscript = (
   fallbackCwd: string,
 ): SessionReport | undefined => {
   let title = ''
+  let customTitle = ''
   let firstPrompt = ''
   let lastPrompt = ''
   let lastReply = ''
@@ -458,8 +459,9 @@ export const parseTranscript = (
     if (typeof line.version === 'string' && line.version !== '') version = line.version
 
     if (line.type === 'summary' && line.summary) title = line.summary
-    if (line.type === 'custom-title' && line.customTitle) title = line.customTitle
-    if (line.type === 'ai-title' && line.aiTitle) aiTitle = line.aiTitle
+    if (line.type === 'custom-title' && line.customTitle) customTitle = line.customTitle
+    // a fork's copy of its parent's title names the parent, not this session
+    if (line.type === 'ai-title' && line.aiTitle && line.forkedFrom === undefined) aiTitle = line.aiTitle
     if (line.isSidechain) continue
     // A fork starts as a copy of its parent's lines, each marked with
     // `forkedFrom`. Those say where it came from and where it stood, but the
@@ -686,7 +688,17 @@ export const parseTranscript = (
   return {
     id,
     transcript: '',
-    title: oneLine(title || firstPrompt || inheritedFirst || aiTitle.replace(/-/g, ' ') || '(no prompt)', 80),
+    // As /resume names it: the title set by hand, then Claude Code's own
+    // (an older build wrote it as a slug), then a summary or the first prompt.
+    title: oneLine(
+      customTitle ||
+        (/\s/.test(aiTitle) ? aiTitle : aiTitle.replace(/-/g, ' ')) ||
+        title ||
+        firstPrompt ||
+        inheritedFirst ||
+        '(no prompt)',
+      80,
+    ),
     parent,
     firstPrompt: clipText(firstPrompt, 800),
     lastPrompt: clipText(lastPrompt, 800),

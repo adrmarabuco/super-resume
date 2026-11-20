@@ -650,3 +650,19 @@ test('the engine check: a build before the minimum is older, a later or unreadab
   expect(isOlderThan('2.1.280-dev', '2.1.281')).toBe(true)
   expect(isOlderThan('local', MIN_ENGINE)).toBe(false)
 })
+
+test('the title is the one /resume shows: set by hand, then Claude Code\'s, then the first prompt', () => {
+  const titleOf = (...lines: string[]) => parseTranscript('t', lines.join('\n'), false, ROOT)!.title
+  const prompt = user('olha esse bug na lista, quando eu desço...')
+  const ai = line({ type: 'ai-title', aiTitle: 'Bugs na lista de conversas', sessionId: 't' })
+  expect(titleOf(prompt)).toBe('olha esse bug na lista, quando eu desço...')
+  expect(titleOf(prompt, ai)).toBe('Bugs na lista de conversas')
+  expect(titleOf(prompt, ai, line({ type: 'custom-title', customTitle: 'Lista' }))).toBe('Lista')
+  // an older build wrote a slug
+  expect(titleOf(prompt, line({ type: 'ai-title', aiTitle: 'fix-list-scroll' }))).toBe('fix list scroll')
+  // a hyphen inside a real title stays
+  expect(titleOf(prompt, line({ type: 'ai-title', aiTitle: 'Bug no plugin em WSL-2' }))).toBe('Bug no plugin em WSL-2')
+  // a fork's copy of its parent's title is not its own
+  expect(titleOf(line({ type: 'ai-title', aiTitle: 'Parent work', forkedFrom: { sessionId: 'p' } }), prompt))
+    .toBe('olha esse bug na lista, quando eu desço...')
+})

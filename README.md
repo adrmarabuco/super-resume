@@ -16,7 +16,7 @@ A visual `/resume` for Claude Code. It opens a pane beside the chat that lists y
 ## What it shows
 
 **Session list (left)**
-- Title (the session summary, or its first prompt)
+- Title, the same one `/resume` shows (one you set, or the one Claude Code gave it; else its first prompt)
 - How long ago it was last active
 - Its grade (A to E, `—` too short to judge, `?` format not recognised)
 - `◌` while background work it started never reported done, `•` on the session you are in now
