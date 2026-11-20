@@ -686,7 +686,14 @@ async function move($: Engine, delta: number): Promise<void> {
   const to = Math.min(ids.length - 1, Math.max(0, from + delta))
   const target = ids[to]
   if (target === undefined) return
-  if (to !== from) {
+  await moveTo($, target, to !== from, delta)
+}
+
+// Select the row `target` (a session id, or a plan name in the plans view)
+// and send the focus ring onto it, so Enter acts on the row the ▶ points at.
+async function moveTo($: Engine, target: string, isNew = true, delta: number = 0): Promise<void> {
+  const mode = await read($, listModeAtom)
+  if (isNew) {
     if (mode === 'plans') await selectPlan($, target)
     else await select($, target)
   }
@@ -827,20 +834,22 @@ export const register: Register = on => {
     const prefix = view.prefix
     // Decided from what the last drawing kept, with nothing awaited first: a
     // throw here would fall through to the catch below and let the ring leave.
+    // A held arrow repeats faster than the window redraws, so the row the ring
+    // goes to is taken as its place at once (`ringAt`), before it is drawn:
+    // the next repeat steps on from there instead of from a row now mid-window.
     if (e.origin.kind === 'person' && ringAt.startsWith(prefix) && !element.startsWith(prefix)) {
       const from = ringAt.slice(prefix.length)
-      const at = view.ids.indexOf(from)
       const index = view.allIds.indexOf(from)
       // the header's buttons (scope, plans) sit above the list; anything else below it
       const isAbove = element.startsWith('scope:') || element.startsWith('mode:')
       const isOut = !element.startsWith('setting:')
-      debug($, `focus ${from} -> ${element || '(engine stop)'}: row ${at}/${view.ids.length}, index ${index}/${view.allIds.length}`)
-      if (isOut && at === view.ids.length - 1 && !isAbove && index >= 0 && index < view.allIds.length - 1) {
-        void move($, 1)
-        return {}
-      }
-      if (isOut && at === 0 && isAbove && index > 0) {
-        void move($, -1)
+      // Leaving the list from a row it has more rows past: the ring only leaves
+      // from the window's edge, or from a row it was sent to and not yet drawn.
+      const target = !isOut || index < 0 ? undefined : view.allIds[isAbove ? index - 1 : index + 1]
+      debug($, `focus ${from} -> ${element || '(engine stop)'}: index ${index}/${view.allIds.length}, to ${target ?? 'out'}`)
+      if (target !== undefined) {
+        ringAt = `${prefix}${target}`
+        void moveTo($, target)
         return {}
       }
     }

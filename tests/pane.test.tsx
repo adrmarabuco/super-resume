@@ -687,5 +687,17 @@ test('the focus ring leaving the window for the footer or the header slides the 
   await settle()
   expect(await selected('s00')).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /↑ \d+ more/ })).toBeUndefined()
+
+  // a held arrow: repeats land before the window redraws, each a row further,
+  // and none lets the ring out onto the footer
+  const top = await shown()
+  for (const id of top.slice(1)) {
+    await focus(`session:${id}`)
+    await settle()
+  }
+  const edge = Number(top[top.length - 1]!.slice(1))
+  await Promise.all([focus('copy-resume'), focus('copy-resume'), focus('copy-resume')])
+  await settle()
+  expect(await selected(`s${String(edge + 3).padStart(2, '0')}`)).toBeDefined()
   await ui.unmount()
 })
