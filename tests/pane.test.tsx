@@ -486,7 +486,8 @@ test('the report sums tokens once per reply, counts the diff, and adds up subage
 
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
   await $.command.run({ command: 'super-resume', args: 'project', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 160 } })
-  const ui = await $.ui.mount({ ...INLINE, props: { ...INLINE.props, scroll: { offset: 0, bodyRows: 36 } }, surface: 'terminal' })
+  // tall enough for the whole report, the new sections included
+  const ui = await $.ui.mount({ ...INLINE, props: { ...INLINE.props, scroll: { offset: 0, bodyRows: 60 } }, surface: 'terminal' })
 
   // in = 100+900 + 50 = 1050, out = 2000, cache = 30000; total 33050
   expect(await ui.find({ type: 'Text', text: /^Tokens 33k \| In 1k \| Out 2k \| Cache 30k$/ })).toBeDefined()

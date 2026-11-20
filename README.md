@@ -9,29 +9,53 @@ A visual `/resume` for Claude Code. It opens a pane beside the chat that lists y
 **Session list (left)**
 - Title (the session summary, or its first prompt)
 - How long ago it was last active
-- A dot on the session you are in now
+- Its grade (A to E, `—` too short to judge, `?` format not recognised)
+- `◌` while background work it started never reported done, `•` on the session you are in now
 
-**Session report (right)**
-- Project, branch, model; when it started, when it last moved, how long it ran
-- Bars for context used, turns (and tool calls), and files edited
-- **Where it stopped**: your last prompt and Claude's last reply
-- **How it began**: the first prompt
-- The files edited in that session
-- A button that copies the command to resume it
+**Session report (right)**, each section can be turned off in settings (`s`)
+- Project, branch, model; the session id and its transcript path
+- When it started, when it last moved, active time of wall time
+- **Score**: the grade and three sub-scores, Flow, Autonomy and Delegation, plus Deliv (what got committed). See *Score* below.
+- **WIP**: the last recap Claude Code wrote of the session, and background work still running
+- Context used, turns, tool calls, files, tokens (the session's and its subagents')
+- **Charts**: a sparkline of work per turn, and the share of replies at each effort level
+- **Where it stopped**: your last prompt and Claude's last reply; **how it began**: the first prompt
+- **Quality**: actions you rejected (with your last correction quoted), interrupts, tool errors, plan revisions, clarifications, compactions
+- **Agents**: subagents started by type, background work (completed, failed, killed, open), depth, messages, skills, the subagents' share of tokens
+- **Todos / Tasks**: the last TodoWrite list or TaskCreate/TaskUpdate task list, with progress; a long session without one gets a hint to track its work with tasks
+- **Plans**: each plan it sent for approval, approved or sent back, how many files the plan names were touched
+- **Uncommitted**: from git, now: of the files it edited inside its repository, the lines not committed, untracked files, and the share a commit since the session started touched (`●` marks dirty files in Files)
+- Diff and the files edited
 
-## Scopes
+**Plans view** (`l`)
+Every plan of the scope: the plans sessions sent for approval and the plan files in `~/.claude/plans` no session wrote. A plan is joined to the session that wrote it and to every later session that read or named its file, so you can see where it was implemented and how many of the files it names were touched, even when the file itself is gone (its text is recovered from the transcript). Enter resumes the latest session of the plan, `c` copies its path (its text when the file is lost), `e` exports it into the project, `<date>-<title>.md` under `docs/plans/` (configurable), with a header saying where it came from. Exporting never overwrites, and a session that later names the exported file stays joined to the plan.
 
-Like `/resume`, you switch what is listed:
+## Keys
 
-| Key | Scope |
+| Key | |
 | --- | --- |
-| `b` | sessions of this project on the current git branch |
-| `p` | every session of this project |
-| `a` | every project |
-| `r` | refresh |
-| `c` | copy `cd <project> && claude --resume <id>` for the selected session |
+| `b` `p` `a` | scope: this branch, this project, every project |
+| `l` | plans view |
+| `s` | settings: sections on or off, export folder (kept across sessions) |
+| `h` | help: what each section and number means |
+| `c` | copy `cd <project> && claude --resume <id>` (in plans: the plan path) |
+| `i` | copy a reference to the session: title, id, project and transcript path, to paste into another conversation so Claude can read what was done there |
+| `e` | export the plan into the project |
+| `r` | refresh (and ask git again) |
 
 ↑/↓ move through the list (Home/End the ends) and the report follows; the list shows the rows that fit, with a count of those above and below. A report taller than its box scrolls: PgDn/PgUp move it a page, the mouse wheel over it a few rows. Enter resumes the session in this terminal (`/resume <id>`), as `/resume` does; a session of another project folder has its `cd … && claude --resume` command copied instead, since a running session cannot change folder. Esc closes the pane.
+
+## Score
+
+Read from the transcript alone, so a session's grade is the same in the list and in its report.
+
+- **Flow**: how smoothly it went. Starts at 100 and loses points, per 10 turns, for each action you rejected (12), interrupt (8), plan rejected without comment (10) and plan sent back with comments (3); tool failures take up to 60 more by their share of calls. A question you answered by asking back costs nothing.
+- **Autonomy**: tool calls per turn, on a log scale: 1 per turn is 20, 30 or more is 100.
+- **Delegation**: half the subagents' share of tokens (40% or more is full use), half the share of background work (agents and commands) that completed; with background commands and no subagent, only that share. A session that handed nothing off has no Delegation, and the grade is the mean of the other two with their weights scaled up.
+- **Grade**: Flow 50%, Autonomy 25%, Delegation 25%; A 85+, B 70+, C 55+, D 40+, else E. `—` below 5 turns or 10 tool calls.
+- **Deliv**, beside the grade but not in it: the share of the session's repository files a commit since it started touched. It comes from git now, so it is read for the selected session only.
+
+The counts come from wording Claude Code writes in its transcripts for itself (refusal and interrupt phrases, task notifications), not from a public format. When a Claude Code update changes it, the parser notices: a refusal-like error it cannot classify, a notification it cannot read, or tool results no longer tied to their calls. The score then shows `?` with the reason instead of reading zero problems as a perfect session. A transcript written by a newer Claude Code release than the one the signals were checked with (2.1) is marked `~`. Every weight and threshold is in one table, `SCORE` in `hooks/parse.ts`, and the help page (`h`) is written from it.
 
 ## Usage
 
@@ -39,6 +63,7 @@ Like `/resume`, you switch what is listed:
 /super-resume            # last scope used (project by default)
 /super-resume branch
 /super-resume all
+/super-resume plans      # open on the plans view
 ```
 
 ## Install
@@ -63,9 +88,9 @@ Outside fullscreen the pane opens above the prompt across the whole terminal: th
 
 ## How it works
 
-It is a Claude Code mod: a hooks module (`hooks/register.tsx`) that registers the `/super-resume` command and draws a `Pane`. Transcripts up to 1.5 MB are read whole; larger ones are read as head and tail, and their counts are shown as lower bounds (`≥`). Context use is the input tokens of the last reply (fresh + cache), against a 200k window, or 1M when the model or the usage says so.
+It is a Claude Code mod: a hooks module (`hooks/register.tsx`) that registers the `/super-resume` command and draws a `Pane`. Transcripts up to 16 MB are read whole; larger ones are read as their first 2 MB and last 8 MB, and their counts are shown as lower bounds (`≥`). Git is asked only about the selected session, and only for the files it edited. Context use is the input tokens of the last reply (fresh + cache), against a 200k window, or 1M when the model or the usage says so.
 
-Nothing is written, sent or summarised by a model: every number comes from the transcript files.
+Nothing is sent anywhere or summarised by a model: every number comes from the transcript files and git. The only thing it writes is a plan you export, into the project folder you chose.
 
 ## Roadmap
 
