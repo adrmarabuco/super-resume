@@ -61,6 +61,7 @@ test('the pane lists sessions and reports where the chosen one stopped', async (
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.list', (_, e) => ({
@@ -100,6 +101,7 @@ test('branch scope keeps only the current branch', async ($, on) => {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.list', () => ({
@@ -137,6 +139,7 @@ test('a scope switch that finishes late never overwrites a later one', async ($,
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.list', (_, e) => {
@@ -203,6 +206,7 @@ test('arrow-key focus on a session row moves the pointer, not just the ring', as
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.list', (_, e) => ({
@@ -246,6 +250,7 @@ test('finds transcripts through the session transcript when HOME is unset', asyn
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('session.info', () => ({
     value: { transcriptPath: `${BASE}/${FOLDER}/current.jsonl`, platform: 'windows', isHosted: false },
   }))
@@ -293,6 +298,7 @@ test('Enter on a session resumes it here, or copies the command for another proj
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.list', (_, e) => ({
@@ -361,6 +367,7 @@ const openMany = async ($: any, on: any, n: number) => {
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.list', (_: unknown, e: { path: string }) => ({
@@ -464,6 +471,7 @@ test('the report sums tokens once per reply, counts the diff, and adds up subage
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.list', (_, e) => {
@@ -523,6 +531,7 @@ test('a fork names its parent and chain, its parent counts its forks, and inheri
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.list', (_, e) => ({
@@ -573,6 +582,7 @@ test('long text is wrapped to the report column, and noise or a missing title fa
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.list', (_, e) => ({
@@ -615,4 +625,24 @@ test('long text is wrapped to the report column, and noise or a missing title fa
   await settle()
   expect(await small.find({ type: 'Text', text: /^↑ 3 more · PgUp$/ })).toBeDefined()
   await small.unmount()
+})
+
+test('on a build older than the pane needs, the command says so and opens nothing', async ($, on) => {
+  let opened = false
+  on('command.register', () => ({ value: { command: 'super-resume' } }))
+  on('ui.open', () => {
+    opened = true
+    return { value: { isPlaced: true } }
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.version', () => ({ value: { version: '2.1.286', base: '2.1.286' } }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const result = await $.command.run({
+    command: 'super-resume',
+    args: '',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 160 },
+  })
+  expect(opened).toBe(false)
+  expect(JSON.stringify(result)).toContain('needs Claude Code 2.1.329 or later (this is 2.1.286)')
 })

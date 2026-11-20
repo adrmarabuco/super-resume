@@ -787,6 +787,21 @@ export const isNewerThan = (version: string, tested: string): boolean => {
   return a > c || (a === c && b > d)
 }
 
+// The oldest Claude Code the pane draws on: earlier builds take only a string
+// inside a Button, refuse the list's styled rows and skip the whole drawing.
+// Keep in step with `engines` in plugin.json (which builds before 2.1.323 ignore).
+export const MIN_ENGINE = '2.1.329'
+
+/** Whether `version` (`2.1.286`) is an earlier release than `min` (`2.1.329`); false when unreadable. */
+export const isOlderThan = (version: string, min: string): boolean => {
+  const parts = (text: string) => /^(\d+)\.(\d+)\.(\d+)/.exec(text)?.slice(1).map(Number)
+  const v = parts(version)
+  const m = parts(min)
+  if (!v || !m) return false
+  for (let i = 0; i < 3; i++) if (v[i] !== m[i]) return v[i]! < m[i]!
+  return false
+}
+
 const clamp = (n: number) => Math.round(Math.max(0, Math.min(100, n)))
 
 export const gradeOf = (overall: number | undefined): string => {

@@ -75,7 +75,7 @@ The counts come from wording Claude Code writes in its transcripts for itself (r
 
 ## Install
 
-Requires Claude Code 2.1.329 or later (`claude --version`; `claude update` to upgrade). Older builds refuse the pane's rows, so `/super-resume` opens nothing.
+Requires Claude Code 2.1.329 or later, on every machine and environment you use it in: Windows, macOS, Linux and each WSL distribution keep their own install (`claude --version` to check, `claude update` to upgrade). From 2.1.323, `/plugin install` and `claude plugin update` skip a build outside that range; on an older build `/super-resume` says which version it found and opens nothing, since those builds cannot draw the pane's rows.
 
 At the prompt of a Claude Code terminal session:
 

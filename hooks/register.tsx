@@ -18,6 +18,8 @@ import {
   planTextFrom,
   planTitle,
   projectFolderName,
+  MIN_ENGINE,
+  isOlderThan,
   relativeTo,
   scoreOf,
   slug,
@@ -718,6 +720,17 @@ const copyCommand = ($: Engine, session: SessionReport, surface: RenderSurface) 
     .copy({ text: `cd "${session.cwd}" && claude --resume ${session.id}`, surface })
     .then(result => $.ui.toast(result.isCopied ? 'Resume command copied' : 'Could not copy'))
 
+// The running build's version when it is older than the pane needs. A build
+// without $.session.version is older still; a version that is not spelled as
+// a release (a source run) is let through.
+const engineTooOld = async ($: Engine): Promise<string | undefined> => {
+  const found = await Promise.resolve()
+    .then(() => $.session.version())
+    .catch(() => undefined)
+  if (!found) return `older than ${MIN_ENGINE}`
+  return isOlderThan(found.base ?? found.version, MIN_ENGINE) ? found.version : undefined
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -728,6 +741,13 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'super-resume' }, async ($, e) => {
+    const old = await engineTooOld($)
+    if (old !== undefined) {
+      return {
+        text: `Super Resume needs Claude Code ${MIN_ENGINE} or later (this is ${old}): run \`claude update\`, then restart the session.`,
+        isTextDisplayOnly: true,
+      }
+    }
     const wanted = e.args.trim().toLowerCase()
     const scope = isScope(wanted) ? wanted : await read($, scopeAtom)
     await loadSettings($)

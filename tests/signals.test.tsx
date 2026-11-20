@@ -4,7 +4,9 @@ import {
   SCORE,
   classifyResult,
   feedbackOf,
+  MIN_ENGINE,
   isNewerThan,
+  isOlderThan,
   looksRefused,
   parseNotifications,
   parseTranscript,
@@ -299,6 +301,7 @@ const open = async ($: any, on: any, transcripts: Record<string, string>, opts: 
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', (_: unknown, e: { argv: readonly string[] }) => {
     const out = opts.git ? opts.git(e.argv) : 'main\n'
@@ -502,6 +505,7 @@ test('a pane mounted while the listing loads draws it when it lands', async ($, 
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
   on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.exists', () => ({ value: false }))
@@ -635,4 +639,14 @@ test('a reply keeps its paragraphs and lists when wrapped', () => {
   expect(wrapBlocks(reply, 24, 2, 'end')).toEqual(['…const x =    1', 'End.'])
   // one paragraph reads as before
   expect(wrapBlocks('a b c', 24, 3)).toEqual(['a b c'])
+})
+
+test('the engine check: a build before the minimum is older, a later or unreadable one is not', () => {
+  expect(isOlderThan('2.1.286', MIN_ENGINE)).toBe(true)
+  expect(isOlderThan('2.0.999', '2.1.0')).toBe(true)
+  expect(isOlderThan(MIN_ENGINE, MIN_ENGINE)).toBe(false)
+  expect(isOlderThan('2.1.330', MIN_ENGINE)).toBe(false)
+  expect(isOlderThan('3.0.0', MIN_ENGINE)).toBe(false)
+  expect(isOlderThan('2.1.280-dev', '2.1.281')).toBe(true)
+  expect(isOlderThan('local', MIN_ENGINE)).toBe(false)
 })
