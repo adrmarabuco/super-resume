@@ -921,7 +921,7 @@ export const register: Register = on => {
     )
 
     const header = (
-      <Box flexDirection="row" justifyContent="space-between">
+      <Box flexDirection="row" justifyContent="space-between" gap={2}>
         <Box flexDirection="row" gap={2}>
           <Text bold color="claude">Super Resume</Text>
           {scopeButton('branch', 'b', listing.branch ? `branch ${listing.branch}` : 'branch')}
