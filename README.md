@@ -71,15 +71,17 @@ The counts come from wording Claude Code writes in its transcripts for itself (r
 At the prompt of a Claude Code terminal session:
 
 ```
-/plugin install super-resume --marketplace adrmarabuco/super-resume
+/plugin marketplace add adrmarabuco/super-resume
+/plugin install super-resume@super-resume
 ```
 
-Answer `y` to add the marketplace, then pick a scope (user is the usual one).
+Pick a scope when asked (user is the usual one), then `/reload-plugins`.
 
 From a shell:
 
 ```
-claude plugin install super-resume --marketplace adrmarabuco/super-resume
+claude plugin marketplace add adrmarabuco/super-resume
+claude plugin install super-resume@super-resume
 ```
 
 In the desktop app: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `adrmarabuco/super-resume`, then **Add plugin**.
