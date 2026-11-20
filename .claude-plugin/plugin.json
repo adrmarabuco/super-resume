@@ -5,6 +5,7 @@
   "author": { "name": "Adriano Marabuco" },
   "repository": "https://github.com/adrmarabuco/super-resume",
   "license": "MIT",
+  "engines": { "claude-code": ">=2.1.329" },
   "keywords": ["resume", "sessions", "navigator", "mod"],
   "types": "./types/index.d.ts"
 }

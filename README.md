@@ -75,6 +75,8 @@ The counts come from wording Claude Code writes in its transcripts for itself (r
 
 ## Install
 
+Requires Claude Code 2.1.329 or later (`claude --version`; `claude update` to upgrade). Older builds refuse the pane's rows, so `/super-resume` opens nothing.
+
 At the prompt of a Claude Code terminal session:
 
 ```
