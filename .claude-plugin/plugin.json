@@ -1,6 +1,6 @@
 {
   "name": "super-resume",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A visual /resume: browse past Claude Code sessions in a pane, with a report for each (where it stopped, context bar, turns, files edited).",
   "author": { "name": "Adriano Marabuco" },
   "repository": "https://github.com/adrmarabuco/super-resume",

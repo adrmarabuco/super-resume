@@ -646,3 +646,46 @@ test('on a build older than the pane needs, the command says so and opens nothin
   expect(opened).toBe(false)
   expect(JSON.stringify(result)).toContain('needs Claude Code 2.1.329 or later (this is 2.1.286)')
 })
+
+// The real terminal moves the focus ring with the arrows while the pane fits:
+// leaving the window's edge for a header or footer button slides the window.
+test('the focus ring leaving the window for the footer or the header slides the list', async ($, on) => {
+  await openMany($, on, 30)
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  const focus = (element: string) =>
+    $.ui.focus({ component: 'Pane', requestId: 'super-resume', element, origin: { kind: 'person' } } as any)
+  const shown = async () => {
+    const rows = []
+    for (let i = 0; i < 30; i++) {
+      const id = `s${String(i).padStart(2, '0')}`
+      if (await ui.find({ type: 'Text', text: new RegExp(`task ${id}`) })) rows.push(id)
+    }
+    return rows
+  }
+  const first = await shown()
+  const last = first[first.length - 1]!
+  // walk the ring onto the window's last row, then past it onto the footer
+  for (const id of first.slice(1)) {
+    await focus(`session:${id}`)
+    await settle()
+  }
+  const selected = (id: string) => ui.find({ type: 'Button', text: new RegExp(`^▶ .*task ${id} `) })
+  expect(await selected(last)).toBeDefined()
+  await focus('copy-resume')
+  await settle()
+  const next = `s${String(Number(last.slice(1)) + 1).padStart(2, '0')}`
+  expect(await selected(next)).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /↑ 1 more/ })).toBeDefined()
+
+  // back up: the window's first row, then past it onto the header's plans button
+  const window = await shown()
+  for (const id of [...window].reverse().slice(1)) {
+    await focus(`session:${id}`)
+    await settle()
+  }
+  await focus('mode:plans')
+  await settle()
+  expect(await selected('s00')).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /↑ \d+ more/ })).toBeUndefined()
+  await ui.unmount()
+})

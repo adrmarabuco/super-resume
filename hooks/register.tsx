@@ -651,6 +651,8 @@ async function choose($: Engine, session: SessionReport, surface: RenderSurface)
 // Module state: a reload starts it over, and the next drawing fills it in.
 const view = {
   ids: [] as string[],
+  // Every row of the list, in order, as drawn (the window shows `ids` of them).
+  allIds: [] as string[],
   prefix: 'session:',
   start: 0,
   listColumns: 0,
@@ -688,7 +690,18 @@ async function move($: Engine, delta: number): Promise<void> {
     if (mode === 'plans') await selectPlan($, target)
     else await select($, target)
   }
-  await $.ui.focus({ requestId: PANE, key: `${mode === 'plans' ? 'plan' : 'session'}:${target}` }).catch(() => undefined)
+  const key = `${mode === 'plans' ? 'plan' : 'session'}:${target}`
+  const result = await $.ui.focus({ requestId: PANE, key }).catch((error: unknown) => ({ deny: String(error) }))
+  if (result.deny) debug($, `move ${delta}: focus ${key} refused: ${result.deny}`)
+}
+
+// A line in the debug log (`claude --debug`), to see what the keys did.
+const debug = ($: Engine, text: string) => {
+  try {
+    $.ui.log(`super-resume: ${text}`, { to: 'debug' })
+  } catch {
+    // no log here: nothing to tell
+  }
 }
 
 // A transcript path with the config folder written as ~/.claude, for display.
@@ -812,22 +825,23 @@ export const register: Register = on => {
   on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const element = e.element ?? ''
     const prefix = view.prefix
+    // Decided from what the last drawing kept, with nothing awaited first: a
+    // throw here would fall through to the catch below and let the ring leave.
     if (e.origin.kind === 'person' && ringAt.startsWith(prefix) && !element.startsWith(prefix)) {
       const from = ringAt.slice(prefix.length)
       const at = view.ids.indexOf(from)
-      const listing = await read($, listingAtom)
-      const ids = prefix === 'plan:' ? listing.plans.map(p => p.name) : listing.sessions.map(s => s.id)
-      const index = ids.indexOf(from)
-      const isAbove = element.startsWith('scope:')
-      if (!element.startsWith('setting:')) {
-        if (at === view.ids.length - 1 && !isAbove && index >= 0 && index < ids.length - 1) {
-          void move($, 1)
-          return {}
-        }
-        if (at === 0 && isAbove && index > 0) {
-          void move($, -1)
-          return {}
-        }
+      const index = view.allIds.indexOf(from)
+      // the header's buttons (scope, plans) sit above the list; anything else below it
+      const isAbove = element.startsWith('scope:') || element.startsWith('mode:')
+      const isOut = !element.startsWith('setting:')
+      debug($, `focus ${from} -> ${element || '(engine stop)'}: row ${at}/${view.ids.length}, index ${index}/${view.allIds.length}`)
+      if (isOut && at === view.ids.length - 1 && !isAbove && index >= 0 && index < view.allIds.length - 1) {
+        void move($, 1)
+        return {}
+      }
+      if (isOut && at === 0 && isAbove && index > 0) {
+        void move($, -1)
+        return {}
       }
     }
     const result = await next(e)
@@ -841,7 +855,10 @@ export const register: Register = on => {
       }
     }
     return result
-  }).catch(($, e, next) => next(e))
+  }).catch(($, e, next) => {
+    debug($, `ui.focus hook failed on ${e.element ?? '(engine stop)'}: ${JSON.stringify(next.error)}`)
+    return next(e)
+  })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -902,6 +919,7 @@ export const register: Register = on => {
     const shownSessions = isPlans ? [] : sessions.slice(start, start + slots)
     const shownPlans = isPlans ? plans.slice(start, start + slots) : []
     view.ids = isPlans ? shownPlans.map(plan => plan.name) : shownSessions.map(session => session.id)
+    view.allIds = isPlans ? plans.map(plan => plan.name) : sessions.map(session => session.id)
     view.prefix = prefix
     view.start = start
     view.listColumns = listOuter
