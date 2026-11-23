@@ -536,6 +536,28 @@ test('arrow keys move the selection and the report instead of scrolling the pane
   await ui.unmount()
 })
 
+test('a jump key scrolls the report to its section, and back to the top when pressed again', async ($, on) => {
+  await openMany($, on, 3)
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^Fix task s00$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Diff$/ })).toBeUndefined()
+
+  await ui.press({ key: 'jump:d' })
+  await settle()
+  expect(await ui.find({ type: 'Text', text: /^Diff$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Fix task s00$/ })).toBeUndefined()
+
+  await ui.press({ key: 'jump:w' })
+  await settle()
+  expect(await ui.find({ type: 'Text', text: /^Last$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Fix task s00$/ })).toBeUndefined()
+
+  await ui.press({ key: 'jump:w' })
+  await settle()
+  expect(await ui.find({ type: 'Text', text: /^Fix task s00$/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('a long list shows only the rows that fit, with a count of the rest', async ($, on) => {
   await openMany($, on, 30)
   const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
@@ -726,8 +748,8 @@ test('long text is wrapped to the report column, and noise or a missing title fa
   expect(await small.find({ type: 'Text', text: /more · PgUp/ })).toBeUndefined()
   await $.ui.scroll(key(20) as any)
   await settle()
-  // 14 rows inside the border, 12 once the edges count: a page is 11
-  expect(await small.find({ type: 'Text', text: /^↑ 11 more · PgUp$/ })).toBeDefined()
+  // 14 rows inside the border, 13 under the jump keys, 11 once the edges count: a page is 10
+  expect(await small.find({ type: 'Text', text: /^↑ 10 more · PgUp$/ })).toBeDefined()
   expect(await small.find({ type: 'Text', text: /Reply of|word\d+ code/ })).toBeDefined()
   await $.ui.scroll(key(-20) as any)
   await settle()

@@ -720,6 +720,16 @@ async function scrollReport($: Engine, delta: number): Promise<void> {
   })
 }
 
+// Scroll the report so row `at` (a section's heading) is its first, or as far
+// as it goes; pressed again where it already stands, back to the top.
+async function jumpReport($: Engine, at: number): Promise<void> {
+  await update($, reportTopAtom, old => {
+    const from = old.id === view.reportId ? old.top : 0
+    const target = Math.max(0, Math.min(view.reportMax, at))
+    return { id: view.reportId, top: from === target ? 0 : target }
+  })
+}
+
 // Move the selection by `delta` rows (±Infinity: first/last), and the focus
 // ring with it so Enter acts on the row the ▶ points at.
 async function move($: Engine, delta: number): Promise<void> {
@@ -1192,6 +1202,14 @@ export const register: Register = on => {
     // how many rows are out of view.
     const lines: ReturnType<typeof Text>[] = []
     let reportSubject = ''
+    // Where each section of a session's report starts, for its jump key: the
+    // row of its heading (every section opens with a blank, then the heading).
+    const anchors: { hotkey: string; label: string; at: number }[] = []
+    const section = (hotkey: string, label: string, added: ReturnType<typeof Text>[]) => {
+      if (added.length === 0) return
+      anchors.push({ hotkey, label, at: lines.length + (added.length > 1 ? 1 : 0) })
+      lines.push(...added)
+    }
 
     const sessionReport = (s: SessionReport) => {
       const git = gitAll[s.id]
@@ -1258,30 +1276,31 @@ export const register: Register = on => {
       if (show('charts')) lines.push(...chartLines(T, s, reportInner))
       lines.push(blank('b2'), <Box key="rule">{rule}</Box>)
       if (show('conversation')) {
-        lines.push(
+        section('w', 'last', [
           blank('b3'),
           <Box key="h:last">{heading('Last')}</Box>,
           ...said('user', 'suggestion', s.lastPrompt, 6, 'start'),
           blank('b4'),
           ...said('agent', 'claude', s.lastReply, 12, 'end'),
-        )
+        ])
         if (s.firstPrompt !== '' && s.firstPrompt !== s.lastPrompt) {
-          lines.push(
+          section('f', 'first', [
             blank('b5'),
             <Box key="h:first">{heading('First')}</Box>,
             ...wrapBlocks(s.firstPrompt, reportInner, 4).map((text, i) => (
               <Text key={`first:${i}`} dimColor wrap="truncate-end">{text}</Text>
             )),
-          )
+          ])
         }
       }
-      if (show('quality')) lines.push(...qualityLines(T, s, reportInner))
-      if (show('agents')) lines.push(...agentLines(T, s, reportInner))
+      if (show('quality')) section('q', 'quality', qualityLines(T, s, reportInner))
+      if (show('agents')) section('g', 'agents', agentLines(T, s, reportInner))
       if (show('wip')) lines.push(...openLines(T, s, reportInner))
-      if (show('todos')) lines.push(...todoLines(T, s, reportInner, show('todoHint')))
-      if (show('plans')) lines.push(...planLines(T, s, plans, reportInner))
-      if (show('uncommitted')) lines.push(...uncommittedLines(T, s, git))
+      if (show('todos')) section('t', 'todos', todoLines(T, s, reportInner, show('todoHint')))
+      if (show('plans')) section('n', 'plans', planLines(T, s, plans, reportInner))
+      if (show('uncommitted')) section('u', 'git', uncommittedLines(T, s, git))
       if (show('files') && s.files.length > 0) {
+        anchors.push({ hotkey: 'd', label: 'diff', at: lines.length + 1 })
         lines.push(
           blank('b6'),
           <Box key="h:diff">{heading('Diff')}</Box>,
@@ -1446,7 +1465,10 @@ export const register: Register = on => {
 
     // Rows inside the border; when the report is taller, the edge rows give
     // way to the ↑/↓ counts.
-    const reportRows = Math.max(1, reportBoxRows - 2)
+    // A report taller than its box gets a row of jump keys above it, one per
+    // section the session has: the key scrolls the section's heading to the top.
+    const jumps = lines.length > reportBoxRows - 2 ? anchors : []
+    const reportRows = Math.max(1, reportBoxRows - 2 - (jumps.length > 0 ? 1 : 0))
     const reportFits = lines.length <= reportRows
     const reportSlots = reportFits ? reportRows : Math.max(1, reportRows - 2)
     const reportMax = Math.max(0, lines.length - reportSlots)
@@ -1473,6 +1495,21 @@ export const register: Register = on => {
         paddingX={1}
         overflow="hidden"
       >
+        {jumps.length > 0 && (
+          <Box key="jumps" flexDirection="row" gap={1} overflow="hidden">
+            {jumps.map(jump => (
+              <Button
+                key={`jump:${jump.hotkey}`}
+                hotkey={jump.hotkey}
+                plain
+                dimColor={!(reportTop > 0 && Math.min(jump.at, reportMax) === reportTop)}
+                onPress={() => void jumpReport($, jump.at)}
+              >
+                {jump.label}
+              </Button>
+            ))}
+          </Box>
+        )}
         {!reportFits && (
           <Text dimColor>{reportAbove > 0 ? `↑ ${reportAbove} more · PgUp` : ' '}</Text>
         )}

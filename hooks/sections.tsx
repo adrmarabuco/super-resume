@@ -621,6 +621,7 @@ export const helpText = (): HelpBlock[] => {
         { term: '↑↓', text: 'move' },
         { term: 'Enter', text: 'resume' },
         { term: 'PgUp/PgDn', text: 'scroll the report' },
+        { term: 'w f q g t n u d', text: 'jump to last, first, quality, agents, todos, plans, git, diff (again: top)' },
         { term: 'b p a', text: 'scope' },
         { term: 'l', text: 'plans' },
         { term: 's', text: 'settings' },

@@ -51,8 +51,9 @@ Every plan of the scope: the plans sessions sent for approval and the plan files
 | `i` | copy a reference to the session: title, id, project and transcript path, to paste into another conversation so Claude can read what was done there |
 | `e` | export the plan into the project |
 | `r` | refresh (and ask git again) |
+| `w` `f` `q` `g` `t` `n` `u` `d` | jump in the report to Last, First, Quality, Agents, Todos, Plans, Uncommitted (git), Diff; again goes back to the top |
 
-↑/↓ move through the list (Home/End the ends) and the report follows; the list shows the rows that fit, with a count of those above and below. A report taller than its box scrolls: PgDn/PgUp move it a page, the mouse wheel over it a few rows. Enter resumes the session in this terminal (`/resume <id>`), as `/resume` does; a session of another folder (another project, or a worktree) has its `cd … && claude --resume` command copied instead, since a running session cannot change folder. Esc closes the pane.
+↑/↓ move through the list (Home/End the ends) and the report follows; the list shows the rows that fit, with a count of those above and below. A report taller than its box scrolls: PgDn/PgUp move it a page, the mouse wheel over it a few rows, and a row of jump keys above it takes you straight to a section. Enter resumes the session in this terminal (`/resume <id>`), as `/resume` does; a session of another folder (another project, or a worktree) has its `cd … && claude --resume` command copied instead, since a running session cannot change folder. Esc closes the pane.
 
 ## Score
 
