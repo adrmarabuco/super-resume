@@ -93,8 +93,26 @@ const exportsAtom = atom({ plugin: 'super-resume', key: 'exports' } as const, {}
 const WHOLE_LIMIT = 16_000_000
 const HEAD_BYTES = 2_000_000
 const TAIL_BYTES = 8_000_000
-const MAX_SESSIONS = 50
+// As many as /resume lists in practice: it has no cap, and a project with a
+// few months of work passes 50 sessions. Parsing is cached by mtime.
+const MAX_SESSIONS = 500
 const MAX_ORPHAN_PLANS = 60
+// The engine rejects a read whose answer passes 4 MiB, so a longer stretch is
+// read in ranges of this size and joined; a character a range edge cuts
+// becomes U+FFFD there, which leaves its line's JSON parseable.
+const READ_CHUNK = 4_000_000
+
+// `length` bytes of a file from `offset`, in ranges the engine accepts; with
+// no length, to its end (a range past the end comes back empty).
+async function readRange($: Engine, path: string, offset = 0, length = WHOLE_LIMIT): Promise<string> {
+  const parts: string[] = []
+  for (let at = offset; at < offset + length; at += READ_CHUNK) {
+    const part = await $.fs.read(path, { offset: at, length: Math.min(READ_CHUNK, offset + length - at) })
+    if (part === '') break
+    parts.push(part)
+  }
+  return parts.join('')
+}
 
 // Parsed reports by path and mtime; a reload starts it over, which is fine.
 const cache = new Map<string, SessionReport | null>()
@@ -125,11 +143,11 @@ async function readReport(
   let text: string
   let isPartial = false
   if (size <= WHOLE_LIMIT) {
-    text = await $.fs.read(path)
+    text = await readRange($, path, 0, size)
   } else {
     isPartial = true
-    const head = await $.fs.read(path, { length: HEAD_BYTES })
-    const tail = await $.fs.read(path, { offset: size - TAIL_BYTES, length: TAIL_BYTES })
+    const head = await readRange($, path, 0, HEAD_BYTES)
+    const tail = await readRange($, path, size - TAIL_BYTES, TAIL_BYTES)
     text = `${head}\n${tail}`
   }
   const report = parseTranscript(id, text, isPartial, fallbackCwd)
@@ -169,8 +187,8 @@ async function readAgents($: Engine, sessionDir: string): Promise<SessionReport[
     const isWhole = entry.size <= WHOLE_LIMIT
     const path = `${dir}/${entry.name}`
     const text = await (isWhole
-      ? $.fs.read(path)
-      : $.fs.read(path, { offset: entry.size - TAIL_BYTES, length: TAIL_BYTES })
+      ? readRange($, path, 0, entry.size)
+      : readRange($, path, entry.size - TAIL_BYTES, TAIL_BYTES)
     ).catch(() => '')
     const usage = parseAgentUsage(text)
     agents.count += 1
@@ -198,6 +216,34 @@ async function locate($: Engine, root: string): Promise<{ base: string; current:
   const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
   const configDir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
   return { base: `${configDir}/projects`, current: projectFolderName(root) }
+}
+
+// This project's transcript folders: its own, and one per worktree of the same
+// repository, which Claude Code keeps apart and /resume lists together. Those
+// git still knows, and those of worktrees since removed, whose folders stay
+// as <main>--claude-worktrees-<name>. A folder no session wrote is not there.
+async function projectFolders($: Engine, base: string, current: string, root: string): Promise<string[]> {
+  // keyed without case: git may spell the drive letter otherwise than the folder
+  const folders = new Map([[current.toLowerCase(), current]])
+  const listed = await $.process
+    .run(['git', 'worktree', 'list', '--porcelain'], { cwd: root, timeoutMs: 5000 })
+    .catch(() => undefined)
+  const add = (folder: string) => {
+    if (!folders.has(folder.toLowerCase())) folders.set(folder.toLowerCase(), folder)
+  }
+  // the first worktree git lists is the main one
+  let main = current
+  if (listed?.exitCode === 0) {
+    const paths = [...listed.stdout.matchAll(/^worktree (.+)$/gm)].map(match => projectFolderName(match[1]!.trim()))
+    main = paths[0] ?? current
+    paths.forEach(add)
+  }
+  const prefix = `${main}--claude-worktrees-`.toLowerCase()
+  const onDisk = await $.fs.list(base).catch(() => [])
+  for (const entry of onDisk) {
+    if (entry.kind === 'dir' && entry.name.toLowerCase().startsWith(prefix)) add(entry.name)
+  }
+  return [...folders.values()]
 }
 
 /**
@@ -291,7 +337,7 @@ async function load($: Engine, scope: Scope): Promise<void> {
     const folders =
       scope === 'all'
         ? (await $.fs.list(base)).filter(entry => entry.kind === 'dir').map(entry => entry.name)
-        : [current]
+        : await projectFolders($, base, current, root)
 
     const files: { path: string; id: string; size: number; mtimeMs: number }[] = []
     for (const folder of folders) {
@@ -320,7 +366,7 @@ async function load($: Engine, scope: Scope): Promise<void> {
     }
 
     // The tree: each listed session, and up a fork's chain the parents that
-    // are not listed (another branch, past the 50), read from this listing's
+    // are not listed (another branch, past the cap), read from this listing's
     // folders. A parent whose transcript is gone stays a bare id.
     const tree: Record<string, TreeNode> = {}
     const node = (report: SessionReport): TreeNode => ({
@@ -524,7 +570,7 @@ async function planText($: Engine, row: PlanRow): Promise<string> {
     for (const id of [row.origin, ...row.linked]) {
       const session = sessions.find(s => s.id === id)
       if (!session || session.transcript === '') continue
-      text = planTextFrom(await $.fs.read(session.transcript).catch(() => ''), row.name)
+      text = planTextFrom(await readRange($, session.transcript).catch(() => ''), row.name)
       if (text !== '') break
     }
   }
@@ -640,7 +686,7 @@ async function choose($: Engine, session: SessionReport, surface: RenderSurface)
   await $.ui.close({ id: PANE })
   $.ui.toast(
     copied.isCopied
-      ? `Other project: resume command copied, paste it in a terminal`
+      ? `Other folder: resume command copied, paste it in a terminal`
       : 'Could not copy the resume command',
   )
 }

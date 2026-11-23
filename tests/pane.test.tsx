@@ -126,6 +126,117 @@ test('branch scope keeps only the current branch', async ($, on) => {
   await ui.unmount()
 })
 
+test('project scope lists the sessions of its worktrees, live and removed', async ($, on) => {
+  const LIVE = `${FOLDER}--claude-worktrees-live`
+  const GONE = `${FOLDER}--claude-worktrees-gone`
+  const files: Record<string, string> = {
+    [`${BASE}/${FOLDER}/aaa.jsonl`]: transcript('the retry logic', 'Retries now back off.', 'main', 1000),
+    [`${BASE}/${LIVE}/ccc.jsonl`]: transcript('the live worktree', 'Live done.', 'live', 1000),
+    [`${BASE}/${GONE}/ddd.jsonl`]: transcript('the removed worktree', 'Gone done.', 'gone', 1000),
+    [`${BASE}/-work-other/eee.jsonl`]: transcript('another project', 'Other done.', 'main', 1000),
+  }
+  const dirs = [FOLDER, LIVE, GONE, '-work-other']
+
+  on('command.register', () => ({ value: { command: 'super-resume' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
+  on('process.run', (_, e) => ({
+    value: {
+      exitCode: 0,
+      stdout: e.argv.includes('worktree')
+        ? `worktree ${ROOT}\nHEAD 1\nbranch refs/heads/main\n\nworktree ${ROOT}/.claude/worktrees/live\nHEAD 2\nbranch refs/heads/live\n`
+        : 'main\n',
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }))
+  on('fs.list', (_, e) => {
+    const path = posix(e.path)
+    if (path === BASE) return { value: dirs.map(name => ({ name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false })) }
+    const folder = path.slice(BASE.length + 1)
+    return {
+      value: Object.keys(files)
+        .filter(file => file.startsWith(`${BASE}/${folder}/`))
+        .map(file => ({ name: file.split('/').at(-1)!, kind: 'file', size: 2000, mtimeMs: 1, isLink: false })),
+    }
+  })
+  on('fs.read', (_, e) => ({ value: files[posix(e.path)] ?? '' }))
+
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await $.command.run({
+    command: 'super-resume',
+    args: 'project',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 160 },
+  })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Fix the retry logic/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Fix the live worktree/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Fix the removed worktree/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Fix another project/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a transcript over the 4 MiB a read may answer is read in ranges, not dropped', async ($, on) => {
+  const MIB4 = 4 * 1024 * 1024
+  // ASCII, so a byte is a character: ~6 MB, the reply at its end
+  const pad = line({ type: 'progress', data: 'x'.repeat(6_000_000) })
+  const big = [transcript('the long session', 'Long one done.', 'main', 1000), pad, line({
+    type: 'assistant', timestamp: '2026-11-18T11:00:00Z', cwd: ROOT, gitBranch: 'main',
+    message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'The very last reply.' }] },
+  })].join('\n')
+  const files: Record<string, string> = {
+    [`${BASE}/${FOLDER}/big.jsonl`]: big,
+    [`${BASE}/${FOLDER}/aaa.jsonl`]: transcript('the retry logic', 'Retries now back off.', 'main', 1000),
+  }
+  let refused = 0
+
+  on('command.register', () => ({ value: { command: 'super-resume' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('fs.list', (_, e) => ({
+    value:
+      posix(e.path) === `${BASE}/${FOLDER}`
+        ? [
+            { name: 'big.jsonl', kind: 'file', size: big.length, mtimeMs: 2, isLink: false },
+            { name: 'aaa.jsonl', kind: 'file', size: 2000, mtimeMs: 1, isLink: false },
+          ]
+        : [],
+  }))
+  // as the engine: the range asked for, and a refusal past 4 MiB
+  on('fs.read', (_, e) => {
+    const text = files[posix(e.path)] ?? ''
+    const offset = e.offset ?? 0
+    const answer = text.slice(offset, e.length === undefined ? undefined : offset + e.length)
+    if (answer.length > MIB4) {
+      refused += 1
+      throw new Error('answer over 4 MiB')
+    }
+    return { value: answer }
+  })
+
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'super-resume', args: 'project', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Fix the long session/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /The very last reply/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Fix the retry logic/ })).toBeDefined()
+  expect(refused).toBe(0)
+  await ui.unmount()
+})
+
 test('a scope switch that finishes late never overwrites a later one', async ($, on) => {
   const OTHER = '-work-other'
   const STALE_FILE = `${BASE}/${OTHER}/ccc.jsonl`

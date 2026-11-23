@@ -43,7 +43,7 @@ Every plan of the scope: the plans sessions sent for approval and the plan files
 
 | Key | |
 | --- | --- |
-| `b` `p` `a` | scope: this branch, this project, every project |
+| `b` `p` `a` | scope: this branch, this project (with its worktrees, as `/resume`), every project |
 | `l` | plans view |
 | `s` | settings: sections on or off, export folder (kept across sessions) |
 | `h` | help: what each section and number means |
@@ -52,7 +52,7 @@ Every plan of the scope: the plans sessions sent for approval and the plan files
 | `e` | export the plan into the project |
 | `r` | refresh (and ask git again) |
 
-↑/↓ move through the list (Home/End the ends) and the report follows; the list shows the rows that fit, with a count of those above and below. A report taller than its box scrolls: PgDn/PgUp move it a page, the mouse wheel over it a few rows. Enter resumes the session in this terminal (`/resume <id>`), as `/resume` does; a session of another project folder has its `cd … && claude --resume` command copied instead, since a running session cannot change folder. Esc closes the pane.
+↑/↓ move through the list (Home/End the ends) and the report follows; the list shows the rows that fit, with a count of those above and below. A report taller than its box scrolls: PgDn/PgUp move it a page, the mouse wheel over it a few rows. Enter resumes the session in this terminal (`/resume <id>`), as `/resume` does; a session of another folder (another project, or a worktree) has its `cd … && claude --resume` command copied instead, since a running session cannot change folder. Esc closes the pane.
 
 ## Score
 
