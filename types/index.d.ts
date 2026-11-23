@@ -224,7 +224,19 @@ export type SectionKey =
   | 'files'
   | 'tree'
 
-export type ListMode = 'sessions' | 'plans'
+export type ListMode = 'sessions' | 'plans' | 'search'
+
+/**
+ * A message the search can find: your prompt or the agent's reply, with
+ * `cut`, the last chain entry of its turn, where a fork can stop
+ * (`--resume-session-at`) to continue from right after that turn.
+ */
+export type SearchEntry = {
+  role: 'user' | 'agent'
+  text: string
+  at: string
+  cut: string
+}
 export type Panel = 'report' | 'settings' | 'help'
 
 declare module 'claude-code' {
@@ -242,6 +254,9 @@ declare module 'claude-code' {
       panel: Panel
       exports: Record<string, string>
       planTextAt: number
+      query: string
+      selectedMatch: string
+      choice: string
     }
   }
 }

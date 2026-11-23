@@ -4,6 +4,7 @@ import type {
   OpenWork,
   PlanRef,
   Quality,
+  SearchEntry,
   SessionReport,
   Signals,
   Todo,
@@ -29,6 +30,7 @@ type Block = {
 
 type Line = {
   type?: string
+  uuid?: string
   subtype?: string
   version?: string
   effort?: string
@@ -389,7 +391,18 @@ export const parseTranscript = (
   text: string,
   isPartial: boolean,
   fallbackCwd: string,
+  // filled, when given, with the prompts and replies the search can find
+  entries?: SearchEntry[],
 ): SessionReport | undefined => {
+  // The search's turns: a prompt opens one, and every entry of a turn gets
+  // the uuid of the last chain entry before the next prompt as its `cut`.
+  let lastUuid = ''
+  let turnStart = 0
+  const closeTurn = (uuid: string) => {
+    if (!entries) return
+    for (let i = turnStart; i < entries.length; i++) entries[i]!.cut = uuid
+    turnStart = entries.length
+  }
   let title = ''
   let customTitle = ''
   let firstPrompt = ''
@@ -463,6 +476,8 @@ export const parseTranscript = (
     // a fork's copy of its parent's title names the parent, not this session
     if (line.type === 'ai-title' && line.aiTitle && line.forkedFrom === undefined) aiTitle = line.aiTitle
     if (line.isSidechain) continue
+    const beforeUuid = lastUuid
+    if ((line.type === 'user' || line.type === 'assistant') && typeof line.uuid === 'string') lastUuid = line.uuid
     // A fork starts as a copy of its parent's lines, each marked with
     // `forkedFrom`. Those say where it came from and where it stood, but the
     // turns, tokens and edits in them are the parent's, not counted here.
@@ -526,6 +541,10 @@ export const parseTranscript = (
           turns += 1
           if (firstPrompt === '') firstPrompt = said
           mention(said)
+          if (entries) {
+            closeTurn(beforeUuid)
+            entries.push({ role: 'user', text: said, at: line.timestamp ?? '', cut: '' })
+          }
         }
         lastPrompt = said
       }
@@ -652,10 +671,14 @@ export const parseTranscript = (
         }
       }
       const said = textOf(message.content)
-      if (said.trim() !== '') lastReply = said
+      if (said.trim() !== '') {
+        lastReply = said
+        if (entries && !isInherited) entries.push({ role: 'agent', text: said, at: line.timestamp ?? '', cut: '' })
+      }
     }
   }
 
+  closeTurn(lastUuid)
   if (turns === 0 && lastReply === '') return undefined
   // A fork with nothing of its own yet starts where its copy ends.
   if (startedAt === '') startedAt = endedAt
@@ -1180,4 +1203,57 @@ export const planTextFrom = (text: string, name: string): string => {
     }
   }
   return found || (name.startsWith('plan-') ? last : '')
+}
+
+// ---------------------------------------------------------------------------
+// Search: words matched in prompts and replies, without case or accents.
+
+const ASCII_LOWER = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code).toLowerCase())
+
+/**
+ * The text in lower case and without accents, one UTF-16 unit for one, so a
+ * position in it is the same position in the text (a snippet cuts both alike).
+ */
+export const fold = (text: string): string => {
+  let out = ''
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code < 128) {
+      out += ASCII_LOWER[code]
+      continue
+    }
+    const unit = text[i]!
+    const bare = unit.normalize('NFD').charAt(0).toLowerCase()
+    out += bare.length === 1 ? bare : unit
+  }
+  return out
+}
+
+/** The query's words, folded: every one must appear in a message, in any order. */
+export const searchTerms = (query: string): string[] => fold(query).split(/\s+/).filter(term => term !== '')
+
+export const matchesAll = (folded: string, terms: string[]): boolean =>
+  terms.length > 0 && terms.every(term => folded.includes(term))
+
+/**
+ * One line of `width` around the first word's first match: the text before
+ * it, the match, the text after, white space turned into single spaces.
+ */
+export const snippetOf = (
+  text: string,
+  folded: string,
+  terms: string[],
+  width: number,
+): { before: string; hit: string; after: string } => {
+  const term = terms[0] ?? ''
+  const at = Math.max(0, folded.indexOf(term))
+  const flat = (part: string) => part.replace(/\s/g, ' ')
+  const lead = Math.max(0, Math.floor((width - term.length) / 3))
+  const start = Math.max(0, at - lead)
+  const before = (start > 0 ? '…' : '') + flat(text.slice(start, at)).replace(/^ +/, '')
+  const hit = flat(text.slice(at, at + term.length))
+  const room = Math.max(0, width - before.length - hit.length)
+  const tail = flat(text.slice(at + term.length, at + term.length + room + 1))
+  const after = tail.length > room ? `${tail.slice(0, Math.max(0, room - 1))}…` : tail
+  return { before, hit, after }
 }

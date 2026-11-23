@@ -39,19 +39,29 @@ A visual `/resume` for Claude Code. It opens a pane beside the chat that lists y
 **Plans view** (`l`)
 Every plan of the scope: the plans sessions sent for approval and the plan files in `~/.claude/plans` no session wrote. A plan is joined to the session that wrote it and to every later session that read or named its file, so you can see where it was implemented and how many of the files it names were touched, even when the file itself is gone (its text is recovered from the transcript). Enter resumes the latest session of the plan, `c` copies its path (its text when the file is lost), `e` exports it into the project, `<date>-<title>.md` under `docs/plans/` (configurable), with a header saying where it came from. Exporting never overwrites, and a session that later names the exported file stays joined to the plan.
 
+**Find** (`f`)
+Search every prompt you wrote and every reply of the scope, like ctrl+r in a shell: type words and the list becomes the messages that hold all of them, in any order, without regard to case or accents (`sessao` finds `sessão`). Newest first. The report shows the message where it sits: the session, the message before, the match, the message after. Enter asks what to do with it: `1` opens the whole conversation, as Enter in the list does; `2` copies a command that continues it from right after that message's turn, as a fork, so the original stays as it is (a `/rewind` in the opened conversation would drop everything after that message):
+
+```
+cd <project> && claude --resume <id> --fork-session --resume-session-at <message>
+```
+
+Nothing leaves your machine and no model runs: the words are matched in what the list already read. Tool calls and their output are not searched.
+
 ## Keys
 
 | Key | |
 | --- | --- |
 | `b` `p` `a` | scope: this branch, this project (with its worktrees, as `/resume`), every project |
 | `l` | plans view |
+| `f` | find: search the messages of the scope (Esc leaves the field; `f` again back to the list) |
 | `s` | settings: sections on or off, export folder (kept across sessions) |
 | `h` | help: what each section and number means |
 | `c` | copy `cd <project> && claude --resume <id>` (in plans: the plan path) |
 | `i` | copy a reference to the session: title, id, project and transcript path, to paste into another conversation so Claude can read what was done there |
 | `e` | export the plan into the project |
 | `r` | refresh (and ask git again) |
-| `w` `f` `q` `g` `t` `n` `u` `d` | jump in the report to Last, First, Quality, Agents, Todos, Plans, Uncommitted (git), Diff; again goes back to the top |
+| `w` `o` `q` `g` `t` `n` `u` `d` | jump in the report to Last, First, Quality, Agents, Todos, Plans, Uncommitted (git), Diff; again goes back to the top |
 
 ↑/↓ move through the list (Home/End the ends) and the report follows; the list shows the rows that fit, with a count of those above and below. A report taller than its box scrolls: PgDn/PgUp move it a page, the mouse wheel over it a few rows, and a row of jump keys above it takes you straight to a section. Enter resumes the session in this terminal (`/resume <id>`), as `/resume` does; a session of another folder (another project, or a worktree) has its `cd … && claude --resume` command copied instead, since a running session cannot change folder. Esc closes the pane.
 
@@ -109,7 +119,6 @@ Nothing is sent anywhere or summarised by a model: every number comes from the t
 ## Roadmap
 
 - Group sessions by front (topic), inferred from what they discuss and the files they touch, not from branches
-- Search across sessions, jumping to the session and the matching message
 - Optional one-line AI summary per session, cached
 - Resume a session of another project folder without the copy and paste
 

@@ -1,13 +1,17 @@
 import { atom, read, update } from 'claude-code'
 import type { Atom, EngineInterface as Engine, Register, RenderSurface } from 'claude-code'
 
-import type { GitInfo, ListMode, Listing, Panel, PlanRow, Scope, SessionReport, Settings, TreeNode } from '../types'
+import type { GitInfo, ListMode, Listing, Panel, PlanRow, Scope, SearchEntry, SessionReport, Settings, TreeNode } from '../types'
 import {
   ago,
   bar,
   duration,
   fit,
   fitStart,
+  fold,
+  matchesAll,
+  searchTerms,
+  snippetOf,
   isSameFile,
   lastPart,
   levelColor,
@@ -56,6 +60,11 @@ const TITLE = 'Super Resume'
 const scopeAtom = atom({ plugin: 'super-resume', key: 'scope' } as const, 'project' as Scope)
 const selectedAtom = atom({ plugin: 'super-resume', key: 'selected' } as const, '')
 const selectedPlanAtom = atom({ plugin: 'super-resume', key: 'selectedPlan' } as const, '')
+// The search: what is typed, and the match the ▶ points at (`<session>:<n>`).
+const queryAtom = atom({ plugin: 'super-resume', key: 'query' } as const, '')
+const selectedMatchAtom = atom({ plugin: 'super-resume', key: 'selectedMatch' } as const, '')
+// The match Enter was pressed on, while the report asks what to do with it.
+const choiceAtom = atom({ plugin: 'super-resume', key: 'choice' } as const, '')
 // How far the report is scrolled, and for which session (or 'help'): picking
 // another starts its report at the top.
 const reportTopAtom = atom({ plugin: 'super-resume', key: 'reportTop' } as const, { id: '', top: 0 })
@@ -119,6 +128,48 @@ const cache = new Map<string, SessionReport | null>()
 // A selected plan's text, by plan name: read on demand, never kept in state.
 const planTexts = new Map<string, string>()
 
+// What the search reads: each transcript's prompts and replies, by the same
+// path and mtime as the report, and the latest by session id. Kept here, not
+// in state: a long session holds megabytes of text.
+const entriesByKey = new Map<string, SearchEntry[]>()
+const entriesById = new Map<string, SearchEntry[]>()
+// Each message folded (lower case, no accents) the first time a search reads it.
+const foldedOf = new WeakMap<SearchEntry, string>()
+const MAX_HITS = 300
+
+type Hit = { id: string; session: SessionReport; entry: SearchEntry; index: number; folded: string }
+
+// The last search, kept while neither the words nor the listing change: every
+// drawing and every arrow key asks for it again.
+let lastSearch: { key: string; hits: Hit[] } | undefined
+
+// The messages holding every word of `query`: the listed sessions in their
+// order (latest first), and in each its newest messages first, as ctrl+r.
+function searchSessions(sessions: SessionReport[], query: string): Hit[] {
+  // the state may hand the listing over as a copy: keyed by its ids, not its identity
+  const key = `${query}|${sessions.map(session => session.id).join(',')}`
+  if (lastSearch && lastSearch.key === key) return lastSearch.hits
+  const terms = searchTerms(query)
+  const hits: Hit[] = []
+  if (terms.length > 0) {
+    for (const session of sessions) {
+      const entries = entriesById.get(session.id) ?? []
+      for (let index = entries.length - 1; index >= 0 && hits.length < MAX_HITS; index--) {
+        const entry = entries[index]!
+        let folded = foldedOf.get(entry)
+        if (folded === undefined) {
+          folded = fold(entry.text)
+          foldedOf.set(entry, folded)
+        }
+        if (matchesAll(folded, terms)) hits.push({ id: `${session.id}:${index}`, session, entry, index, folded })
+      }
+      if (hits.length >= MAX_HITS) break
+    }
+  }
+  lastSearch = { key, hits }
+  return hits
+}
+
 // Bumped by every load() call. A switch of scope while an earlier load is
 // still reading files (branch -> all -> project, pressed quickly) must not
 // let the earlier one win the final paint just because its disk reads
@@ -138,7 +189,10 @@ async function readReport(
 ): Promise<SessionReport | undefined> {
   const key = `${path}:${mtimeMs}`
   const known = cache.get(key)
-  if (known !== undefined) return known ?? undefined
+  if (known !== undefined) {
+    entriesById.set(id, entriesByKey.get(key) ?? [])
+    return known ?? undefined
+  }
 
   let text: string
   let isPartial = false
@@ -150,7 +204,10 @@ async function readReport(
     const tail = await readRange($, path, size - TAIL_BYTES, TAIL_BYTES)
     text = `${head}\n${tail}`
   }
-  const report = parseTranscript(id, text, isPartial, fallbackCwd)
+  const entries: SearchEntry[] = []
+  const report = parseTranscript(id, text, isPartial, fallbackCwd, entries)
+  entriesByKey.set(key, entries)
+  entriesById.set(id, entries)
   if (report) {
     report.transcript = path
     report.agents = await readAgents($, path.slice(0, -'.jsonl'.length))
@@ -397,6 +454,7 @@ async function load($: Engine, scope: Scope): Promise<void> {
     // state stands, so this now-stale one is dropped instead of clobbering it.
     if (seq !== loadSeq) return
 
+    lastSearch = undefined // the same ids may now hold newer messages
     await update($, exportsAtom, () => exported)
     await update($, listingAtom, () => ({
       scope,
@@ -552,6 +610,8 @@ async function setListMode($: Engine, mode: ListMode): Promise<void> {
     const name = await read($, selectedPlanAtom)
     await $.ui.focus({ requestId: PANE, key: `plan:${name}` }).catch(() => undefined)
     void loadPlanText($, name)
+  } else if (mode === 'search') {
+    await $.ui.focus({ requestId: PANE, key: 'search' }).catch(() => undefined)
   } else {
     const id = await read($, selectedAtom)
     await $.ui.focus({ requestId: PANE, key: `session:${id}` }).catch(() => undefined)
@@ -735,9 +795,19 @@ async function jumpReport($: Engine, at: number): Promise<void> {
 async function move($: Engine, delta: number): Promise<void> {
   const mode = await read($, listModeAtom)
   const listing = await read($, listingAtom)
-  const ids = mode === 'plans' ? listing.plans.map(p => p.name) : listing.sessions.map(s => s.id)
+  const ids =
+    mode === 'plans'
+      ? listing.plans.map(p => p.name)
+      : mode === 'search'
+        ? searchSessions(listing.sessions, await read($, queryAtom)).map(hit => hit.id)
+        : listing.sessions.map(s => s.id)
   if (ids.length === 0) return
-  const selected = mode === 'plans' ? await read($, selectedPlanAtom) : await read($, selectedAtom)
+  const selected =
+    mode === 'plans'
+      ? await read($, selectedPlanAtom)
+      : mode === 'search'
+        ? await read($, selectedMatchAtom)
+        : await read($, selectedAtom)
   const from = Math.max(0, ids.indexOf(selected))
   const to = Math.min(ids.length - 1, Math.max(0, from + delta))
   const target = ids[to]
@@ -751,11 +821,53 @@ async function moveTo($: Engine, target: string, isNew = true, delta: number = 0
   const mode = await read($, listModeAtom)
   if (isNew) {
     if (mode === 'plans') await selectPlan($, target)
+    else if (mode === 'search') {
+      await update($, selectedMatchAtom, () => target)
+      await update($, choiceAtom, () => '')
+    }
     else await select($, target)
   }
-  const key = `${mode === 'plans' ? 'plan' : 'session'}:${target}`
+  const key = `${mode === 'plans' ? 'plan' : mode === 'search' ? 'match' : 'session'}:${target}`
   const result = await $.ui.focus({ requestId: PANE, key }).catch((error: unknown) => ({ deny: String(error) }))
   if (result.deny) debug($, `move ${delta}: focus ${key} refused: ${result.deny}`)
+}
+
+// Every keystroke in the search field: the words, and the ▶ back on the
+// newest match.
+async function setQuery($: Engine, query: string): Promise<void> {
+  await update($, choiceAtom, () => '')
+  await update($, selectedMatchAtom, () => '')
+  await update($, queryAtom, () => query)
+}
+
+// The command that continues a session from right after a found message's
+// turn: a fork (a new session id; the original stays as it is) cut at the
+// turn's last entry. A running session cannot open another in place, so it
+// is copied to paste in a terminal, as a session of another folder is.
+const forkCommand = (hit: Hit): string =>
+  hit.entry.cut === ''
+    ? `cd "${hit.session.cwd}" && claude --resume ${hit.session.id}`
+    : `cd "${hit.session.cwd}" && claude --resume ${hit.session.id} --fork-session --resume-session-at ${hit.entry.cut}`
+
+// Enter on a match asks first: open the whole conversation, or fork it right
+// after this message. A rewind in the opened one would drop what came after.
+async function askChoice($: Engine, hit: Hit): Promise<void> {
+  await update($, selectedMatchAtom, () => hit.id)
+  await update($, choiceAtom, () => hit.id)
+  // the question sits at the report's top: scrolled there, it is in view
+  await update($, reportTopAtom, () => ({ id: `match:${hit.id}`, top: 0 }))
+  await $.ui.focus({ requestId: PANE, key: 'choice:open' }).catch(() => undefined)
+}
+
+async function forkAt($: Engine, hit: Hit, surface: RenderSurface): Promise<void> {
+  await update($, selectedMatchAtom, () => hit.id)
+  const copied = await $.ui.copy({ text: forkCommand(hit), surface })
+  await $.ui.close({ id: PANE })
+  $.ui.toast(
+    copied.isCopied
+      ? 'Fork command copied: paste it in a terminal to continue right after this message'
+      : 'Could not copy the fork command',
+  )
 }
 
 // A line in the debug log (`claude --debug`), to see what the keys did.
@@ -897,7 +1009,7 @@ export const register: Register = on => {
       const from = ringAt.slice(prefix.length)
       const index = view.allIds.indexOf(from)
       // the header's buttons (scope, plans) sit above the list; anything else below it
-      const isAbove = element.startsWith('scope:') || element.startsWith('mode:')
+      const isAbove = element.startsWith('scope:') || element.startsWith('mode:') || element === 'search'
       const isOut = !element.startsWith('setting:')
       // Leaving the list from a row it has more rows past: the ring only leaves
       // from the window's edge, or from a row it was sent to and not yet drawn.
@@ -914,6 +1026,11 @@ export const register: Register = on => {
       ringAt = element
       if (element.startsWith('session:')) await select($, element.slice('session:'.length))
       if (element.startsWith('plan:')) await selectPlan($, element.slice('plan:'.length))
+      if (element.startsWith('match:')) {
+        const id = element.slice('match:'.length)
+        await update($, selectedMatchAtom, () => id)
+        await update($, choiceAtom, old => (old === id ? old : ''))
+      }
       if (element.startsWith('setting:')) {
         const at = SETTING_ROWS.indexOf(element.slice('setting:'.length))
         if (at >= 0) await update($, settingsAtAtom, () => at)
@@ -926,7 +1043,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Input } = $.ui.resolve(e)
     const T = { Box, Text }
     const listing = await read($, listingAtom)
     const scope = await read($, scopeAtom)
@@ -936,6 +1053,9 @@ export const register: Register = on => {
     const settings = await read($, settingsAtom)
     const settingsAt = await read($, settingsAtAtom)
     const mode = await read($, listModeAtom)
+    const query = await read($, queryAtom)
+    const selectedMatchId = await read($, selectedMatchAtom)
+    const choice = await read($, choiceAtom)
     const panel = await read($, panelAtom)
     const gitAll = await read($, gitAtom)
     const exported = await read($, exportsAtom)
@@ -955,8 +1075,13 @@ export const register: Register = on => {
     const planIndex = Math.max(0, plans.findIndex(plan => plan.name === selectedPlanName))
     const selectedPlan = plans[planIndex]
     const isPlans = mode === 'plans'
-    const rowCount = isPlans ? plans.length : sessions.length
-    const activeIndex = isPlans ? planIndex : selectedIndex
+    const isSearch = mode === 'search'
+    const hits = isSearch ? searchSessions(sessions, query) : []
+    const terms = isSearch ? searchTerms(query) : []
+    const hitIndex = Math.max(0, hits.findIndex(hit => hit.id === selectedMatchId))
+    const selectedHit = hits[hitIndex]
+    const rowCount = isPlans ? plans.length : isSearch ? hits.length : sessions.length
+    const activeIndex = isPlans ? planIndex : isSearch ? hitIndex : selectedIndex
 
     // Rows: header 1 + a blank, a blank + footer 1, and in split each column's border 2 + its
     // heading 1 + a blank. Stacked: a hint row when docked, the list box, then the report.
@@ -976,15 +1101,24 @@ export const register: Register = on => {
     // the least that keeps the selected row showing.
     const overflows = rowCount > listSlots
     const slots = overflows ? Math.max(1, listSlots - 2) : listSlots
-    const prefix = isPlans ? 'plan:' : 'session:'
+    const prefix = isPlans ? 'plan:' : isSearch ? 'match:' : 'session:'
     let start = view.prefix === prefix ? Math.min(view.start, Math.max(0, rowCount - slots)) : 0
     if (activeIndex < start) start = activeIndex
     if (activeIndex >= start + slots) start = activeIndex - slots + 1
     start = Math.max(0, start)
-    const shownSessions = isPlans ? [] : sessions.slice(start, start + slots)
+    const shownSessions = isPlans || isSearch ? [] : sessions.slice(start, start + slots)
     const shownPlans = isPlans ? plans.slice(start, start + slots) : []
-    view.ids = isPlans ? shownPlans.map(plan => plan.name) : shownSessions.map(session => session.id)
-    view.allIds = isPlans ? plans.map(plan => plan.name) : sessions.map(session => session.id)
+    const shownHits = isSearch ? hits.slice(start, start + slots) : []
+    view.ids = isPlans
+      ? shownPlans.map(plan => plan.name)
+      : isSearch
+        ? shownHits.map(hit => hit.id)
+        : shownSessions.map(session => session.id)
+    view.allIds = isPlans
+      ? plans.map(plan => plan.name)
+      : isSearch
+        ? hits.map(hit => hit.id)
+        : sessions.map(session => session.id)
     view.prefix = prefix
     view.start = start
     view.listColumns = listOuter
@@ -1019,9 +1153,24 @@ export const register: Register = on => {
           >
             {isPlans ? <Text bold color="claude">● plans</Text> : <Text>plans</Text>}
           </Button>
+          <Button
+            key="mode:search"
+            hotkey="f"
+            plain
+            dimColor={!isSearch}
+            onPress={() => void setListMode($, isSearch ? 'sessions' : 'search')}
+          >
+            {isSearch ? <Text bold color="claude">● find</Text> : <Text>find</Text>}
+          </Button>
         </Box>
         <Text dimColor>
-          {listing.isLoading ? 'loading…' : isPlans ? `${plans.length} plans` : `${sessions.length} sessions`}
+          {listing.isLoading
+            ? 'loading…'
+            : isPlans
+              ? `${plans.length} plans`
+              : isSearch
+                ? `${hits.length}${hits.length >= MAX_HITS ? '+' : ''} matches`
+                : `${sessions.length} sessions`}
         </Text>
       </Box>
     )
@@ -1077,8 +1226,27 @@ export const register: Register = on => {
       )
     }
 
+    // A match: who said it, the words around it with the match in bold, and
+    // the session it is in.
+    const hitRow = (hit: Hit) => {
+      const isSelected = hit.id === selectedHit?.id
+      const where = fit(hit.session.title, Math.min(24, Math.max(8, Math.floor(listInner / 4))))
+      const width = Math.max(8, listInner - 2 - 2 - where.length - 2)
+      const cut = snippetOf(hit.entry.text, hit.folded, terms, width)
+      return (
+        <Button key={`match:${hit.id}`} plain onPress={() => void askChoice($, hit)}>
+          <Text color="claude">{isSelected ? '▶ ' : '  '}</Text>
+          <Text color={hit.entry.role === 'user' ? 'suggestion' : 'claude'}>{hit.entry.role === 'user' ? '› ' : '‹ '}</Text>
+          <Text dimColor={!isSelected}>{cut.before}</Text>
+          <Text bold color="warning">{cut.hit}</Text>
+          <Text dimColor={!isSelected}>{cut.after.padEnd(Math.max(0, width - cut.before.length - cut.hit.length))}</Text>
+          <Text dimColor>  {where}</Text>
+        </Button>
+      )
+    }
+
     const above = start
-    const below = rowCount - start - (isPlans ? shownPlans.length : shownSessions.length)
+    const below = rowCount - start - (isPlans ? shownPlans.length : isSearch ? shownHits.length : shownSessions.length)
     const list = (
       <Box
         flexDirection="column"
@@ -1089,15 +1257,41 @@ export const register: Register = on => {
         paddingX={1}
         overflow="hidden"
       >
-        <Text bold color="subtle">{isPlans ? 'Plans' : 'Sessions'}</Text>
+        {isSearch ? (
+          <Input
+            key="search"
+            label="find "
+            placeholder="words in your prompts and the replies"
+            value={query}
+            submitLabel="matches"
+            autoFocus={panel !== 'settings' || undefined}
+            onInput={value => void setQuery($, value)}
+            onSubmit={() => {
+              // Enter in the field asks at once about the match the ▶ points at
+              const hit = selectedHit ?? hits[0]
+              if (hit) void askChoice($, hit)
+            }}
+          />
+        ) : (
+          <Text bold color="subtle">{isPlans ? 'Plans' : 'Sessions'}</Text>
+        )}
         <Text> </Text>
         {rowCount === 0 && (
           <Text dimColor>
-            {listing.error || (listing.isLoading ? 'Reading…' : isPlans ? 'No plans in this scope.' : 'No sessions.')}
+            {listing.error ||
+              (listing.isLoading
+                ? 'Reading…'
+                : isPlans
+                  ? 'No plans in this scope.'
+                  : isSearch
+                    ? terms.length === 0
+                      ? 'Type to search every prompt and reply of this scope.'
+                      : 'No message holds every word.'
+                    : 'No sessions.')}
           </Text>
         )}
         {overflows && <Text dimColor>{above > 0 ? `  ↑ ${above} more` : ' '}</Text>}
-        {isPlans ? shownPlans.map(planRow) : shownSessions.map(row)}
+        {isPlans ? shownPlans.map(planRow) : isSearch ? shownHits.map(hitRow) : shownSessions.map(row)}
         {overflows && <Text dimColor>{below > 0 ? `  ↓ ${below} more` : ' '}</Text>}
       </Box>
     )
@@ -1284,7 +1478,7 @@ export const register: Register = on => {
           ...said('agent', 'claude', s.lastReply, 12, 'end'),
         ])
         if (s.firstPrompt !== '' && s.firstPrompt !== s.lastPrompt) {
-          section('f', 'first', [
+          section('o', 'first', [
             blank('b5'),
             <Box key="h:first">{heading('First')}</Box>,
             ...wrapBlocks(s.firstPrompt, reportInner, 4).map((text, i) => (
@@ -1326,6 +1520,70 @@ export const register: Register = on => {
           lines.push(<Text key="files:more" dimColor>+{s.files.length - 30} more</Text>)
         }
       }
+    }
+
+    // A found message in its place: the session, the message before it, the
+    // message around the match, the one after, and how to continue from it.
+    const matchReport = (hit: Hit) => {
+      const s = hit.session
+      const entries = entriesById.get(s.id) ?? []
+      const inSession = hits.filter(other => other.session.id === s.id).length
+      const at = Math.max(0, hit.folded.indexOf(terms[0] ?? ''))
+      const from = Math.max(0, hit.entry.text.lastIndexOf(String.fromCharCode(10), Math.max(0, at - 300)) + 1)
+      const excerpt = (from > 0 ? '… ' : '') + hit.entry.text.slice(from, at + 1200)
+      const who = (entry: SearchEntry) => (entry.role === 'user' ? 'user' : 'agent')
+      const color = (entry: SearchEntry) => (entry.role === 'user' ? 'suggestion' : 'claude')
+      // a neighbour, dim: who said it and its first or last lines
+      const aside = (entry: SearchEntry, tag: string, keep: 'start' | 'end') => {
+        const prefix = `${who(entry).padEnd(5)} › `
+        return wrapBlocks(entry.text, reportInner - prefix.length, 3, keep).map((text, i) => (
+          <Text key={`m:${tag}:${i}`} dimColor wrap="truncate-end">
+            {i === 0 ? prefix : ' '.repeat(prefix.length)}
+            {text}
+          </Text>
+        ))
+      }
+      const previous = entries[hit.index - 1]
+      const next = entries[hit.index + 1]
+      lines.push(
+        <Text key="m:title" bold color="claude" wrap="truncate-end">{s.title}</Text>,
+        <Text key="m:meta" wrap="truncate-end">
+          <Text>{lastPart(s.cwd)}</Text>
+          {s.branch !== '' && <Text>{SEP}<Text color="merged">⎇ {s.branch}</Text></Text>}
+          {SEP}<Text dimColor>{hit.entry.at !== '' ? `${ago(hit.entry.at, now)} ago` : ''}</Text>
+          {SEP}<Text dimColor>message {hit.index + 1} of {entries.length}</Text>
+          {inSession > 1 && <Text dimColor> | {inSession} matches here</Text>}
+        </Text>,
+        <Text key="m:id" wrap="truncate-end"><Text dimColor>id </Text><Text color="suggestion">{s.id}</Text></Text>,
+      )
+      // At the top, so a long message never pushes it out of the box.
+      lines.push(blank('m:b0'))
+      if (choice === hit.id) {
+        lines.push(
+          <Text key="m:ask" bold>Continue how?</Text>,
+          <Button key="choice:open" hotkey="1" plain onPress={press => void choose($, s, press.surface)}>
+            open the whole conversation
+          </Button>,
+          <Button key="choice:fork" hotkey="2" plain onPress={press => void forkAt($, hit, press.surface)}>
+            fork it right after this message (the original stays as it is)
+          </Button>,
+        )
+      } else {
+        lines.push(
+          <Text key="m:enter" wrap="truncate-end">
+            <Text color="claude">Enter </Text>
+            <Text dimColor>open the whole conversation, or fork it right after this message</Text>
+          </Text>,
+        )
+      }
+      if (previous) {
+        lines.push(blank('m:b1'), ...aside(previous, 'prev', 'end'))
+      }
+      lines.push(blank('m:b2'), ...said(who(hit.entry), color(hit.entry), excerpt, 14, 'start'))
+      if (next) {
+        lines.push(blank('m:b3'), ...aside(next, 'next', 'start'))
+      }
+
     }
 
     const planReport = (p: PlanRow) => {
@@ -1453,6 +1711,10 @@ export const register: Register = on => {
           </Button>,
         )
       })
+    } else if (isSearch) {
+      reportSubject = selectedHit ? `match:${selectedHit.id}` : ''
+      if (selectedHit) matchReport(selectedHit)
+      else lines.push(<Text key="none" dimColor>{terms.length === 0 ? 'Type words to find.' : 'No match.'}</Text>)
     } else if (isPlans) {
       reportSubject = selectedPlan ? `plan:${selectedPlan.name}` : ''
       if (selectedPlan) planReport(selectedPlan)
@@ -1523,7 +1785,13 @@ export const register: Register = on => {
     const footer = (
       <Box flexDirection="row" gap={2}>
         <Text dimColor wrap="truncate-end">
-          {isSplit ? '↑↓ move · Home/End · PgUp/PgDn report · Enter resume' : '↑↓ move · PgUp/PgDn · Enter'}
+          {isSearch
+            ? isSplit
+              ? '↑↓ matches · PgUp/PgDn report · Enter open or fork · Esc leave field'
+              : '↑↓ · Enter open or fork'
+            : isSplit
+              ? '↑↓ move · Home/End · PgUp/PgDn report · Enter resume'
+              : '↑↓ move · PgUp/PgDn · Enter'}
         </Text>
         <Button
           key="copy-resume"
@@ -1533,6 +1801,12 @@ export const register: Register = on => {
           onPress={press => {
             if (isPlans) {
               if (selectedPlan) void copyPlan($, selectedPlan, press.surface)
+            } else if (isSearch) {
+              if (selectedHit) {
+                void $.ui
+                  .copy({ text: forkCommand(selectedHit), surface: press.surface })
+                  .then(result => $.ui.toast(result.isCopied ? 'Fork command copied' : 'Could not copy'))
+              }
             } else if (selected) copyCommand($, selected, press.surface)
           }}
         >
@@ -1544,7 +1818,11 @@ export const register: Register = on => {
           plain
           dimColor
           onPress={press => {
-            const session = isPlans && selectedPlan ? latestOf(selectedPlan, sessions) : selected
+            const session = isPlans && selectedPlan
+              ? latestOf(selectedPlan, sessions)
+              : isSearch
+                ? selectedHit?.session
+                : selected
             copyReference($, session, press.surface)
           }}
         >

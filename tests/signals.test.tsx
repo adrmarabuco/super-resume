@@ -4,6 +4,10 @@ import {
   SCORE,
   classifyResult,
   feedbackOf,
+  fold,
+  matchesAll,
+  searchTerms,
+  snippetOf,
   MIN_ENGINE,
   isNewerThan,
   isOlderThan,
@@ -665,4 +669,47 @@ test('the title is the one /resume shows: set by hand, then Claude Code\'s, then
   // a fork's copy of its parent's title is not its own
   expect(titleOf(line({ type: 'ai-title', aiTitle: 'Parent work', forkedFrom: { sessionId: 'p' } }), prompt))
     .toBe('olha esse bug na lista, quando eu desço...')
+})
+
+test('search: folded without case or accents, every word in any order, a snippet around the match', () => {
+  expect(fold('Sessão ÁRVORE já')).toBe('sessao arvore ja')
+  expect(fold('Sessão ÁRVORE já').length).toBe('Sessão ÁRVORE já'.length)
+  expect(searchTerms('  Ação   BEAT  ')).toEqual(['acao', 'beat'])
+  expect(matchesAll(fold('O beatmap da ação nova'), searchTerms('acao beat'))).toBe(true)
+  expect(matchesAll(fold('O beatmap da ação nova'), searchTerms('acao kata'))).toBe(false)
+  expect(matchesAll('anything', [])).toBe(false)
+
+  const text = `${'a'.repeat(100)}\nthe Ação here${'b'.repeat(100)}`
+  const cut = snippetOf(text, fold(text), searchTerms('acao'), 40)
+  expect(cut.hit).toBe('Ação')
+  expect(cut.before.startsWith('…')).toBe(true)
+  expect(cut.before + cut.hit + cut.after).not.toContain('\n')
+  expect((cut.before + cut.hit + cut.after).length).toBeLessThanOrEqual(41)
+})
+
+test('search: each prompt and reply is collected, cut at the last entry of its turn', () => {
+  const at = '2026-11-18T10:00:00Z'
+  const user = (uuid: string, content: unknown) =>
+    JSON.stringify({ type: 'user', uuid, timestamp: at, cwd: ROOT, message: { role: 'user', content } })
+  const agent = (uuid: string, text: string) =>
+    JSON.stringify({ type: 'assistant', uuid, timestamp: at, cwd: ROOT,
+      message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }] } })
+  const text = [
+    user('u1', 'first question'),
+    agent('a1', 'looking'),
+    user('r1', [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }]),
+    agent('a2', 'first answer'),
+    user('u2', 'second question'),
+    agent('a3', 'second answer'),
+    JSON.stringify({ type: 'assistant', uuid: 's1', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: 'a subagent' }] } }),
+  ].join('\n')
+  const entries: any[] = []
+  parseTranscript('x', text, false, ROOT, entries)
+  expect(entries.map(e => [e.role, e.text, e.cut])).toEqual([
+    ['user', 'first question', 'a2'],
+    ['agent', 'looking', 'a2'],
+    ['agent', 'first answer', 'a2'],
+    ['user', 'second question', 'a3'],
+    ['agent', 'second answer', 'a3'],
+  ])
 })

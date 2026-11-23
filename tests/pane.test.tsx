@@ -237,6 +237,107 @@ test('a transcript over the 4 MiB a read may answer is read in ranges, not dropp
   await ui.unmount()
 })
 
+test('find: typed words list the messages that hold them; Enter asks to open the conversation or fork it there', async ($, on) => {
+  const at = '2026-11-18T10:00:00Z'
+  const user = (uuid: string, content: string) =>
+    line({ type: 'user', uuid, timestamp: at, cwd: ROOT, gitBranch: 'main', message: { role: 'user', content } })
+  const agent = (uuid: string, text: string) =>
+    line({ type: 'assistant', uuid, timestamp: at, cwd: ROOT, gitBranch: 'main',
+      message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }] } })
+  const files: Record<string, string> = {
+    [`${BASE}/${FOLDER}/aaa.jsonl`]: [
+      user('u1', 'tune the kata timing'),
+      // long: the report runs past its box, and the question must stay in view
+      agent('a1', ['The Ação window is now 120 ms.', ...Array(60).fill('More detail on the timing.')].join(String.fromCharCode(10))),
+      user('u2', 'now the menu'),
+      agent('a2', 'Menu done.'),
+    ].join('\n'),
+    [`${BASE}/${FOLDER}/bbb.jsonl`]: [user('v1', 'write the readme'), agent('b1', 'Readme written.')].join('\n'),
+  }
+  const copied: string[] = []
+  const resumed: string[] = []
+
+  on('command.register', () => ({ value: { command: 'super-resume' } }))
+  on('command.run', { command: 'resume' }, (_, e) => {
+    resumed.push(e.args)
+    return { text: '' }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.close', () => ({ value: undefined }))
+  on('ui.copy', (_, e) => {
+    copied.push(e.text)
+    return { value: { isCopied: true } }
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('fs.list', (_, e) => ({
+    value:
+      posix(e.path) === `${BASE}/${FOLDER}`
+        ? [
+            { name: 'aaa.jsonl', kind: 'file', size: 2000, mtimeMs: 2, isLink: false },
+            { name: 'bbb.jsonl', kind: 'file', size: 2000, mtimeMs: 1, isLink: false },
+          ]
+        : [],
+  }))
+  on('fs.read', (_, e) => ({ value: files[posix(e.path)] ?? '' }))
+
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'super-resume', args: 'project', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 160 } })
+  const ui = await $.ui.mount({ ...INLINE, props: { ...INLINE.props, scroll: { offset: 0, bodyRows: 40 } }, surface: 'terminal' })
+
+  await ui.press({ key: 'mode:search' })
+  await settle()
+  expect(await ui.find({ type: 'Text', text: /Type to search every prompt and reply/ })).toBeDefined()
+
+  // no accents and another case, the words in any order
+  await ui.input({ key: 'search', text: 'WINDOW acao', kind: 'change' })
+  await settle()
+  expect(await ui.find({ type: 'Text', text: /^1 matches$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Ação' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /message 2 of 4/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /tune the kata timing/ })).toBeDefined()
+
+  await ui.unmount()
+
+  // Enter in the field asks at once, in view in a small box, and nothing runs yet
+  const small = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await small.input({ key: 'search', text: 'WINDOW acao' })
+  await settle()
+  expect(await small.find({ type: 'Text', text: /Continue how\?/ })).toBeDefined()
+  expect(await small.find({ key: 'choice:open' })).toBeDefined()
+  expect(await small.find({ key: 'choice:fork' })).toBeDefined()
+  expect(copied).toEqual([])
+  expect(resumed).toEqual([])
+  await small.unmount()
+
+  const ui2 = await $.ui.mount({ ...INLINE, props: { ...INLINE.props, scroll: { offset: 0, bodyRows: 40 } }, surface: 'terminal' })
+  // Enter on the row asks too
+  await ui2.press({ key: 'match:aaa:1' })
+  await settle()
+  expect(await ui2.find({ type: 'Text', text: /Continue how\?/ })).toBeDefined()
+
+  // 2: a fork cut right after the turn
+  await ui2.press({ key: 'choice:fork' })
+  await settle()
+  expect(copied).toEqual([`cd "${ROOT}" && claude --resume aaa --fork-session --resume-session-at a1`])
+
+  // 1: the whole conversation, resumed as the list's Enter does
+  await ui2.press({ key: 'match:aaa:1' })
+  await settle()
+  await ui2.press({ key: 'choice:open' })
+  await settle()
+  expect(resumed).toEqual(['aaa'])
+
+  await ui2.input({ key: 'search', text: 'nothing like this', kind: 'change' })
+  await settle()
+  expect(await ui2.find({ type: 'Text', text: /No message holds every word/ })).toBeDefined()
+  await ui2.unmount()
+})
+
 test('a scope switch that finishes late never overwrites a later one', async ($, on) => {
   const OTHER = '-work-other'
   const STALE_FILE = `${BASE}/${OTHER}/ccc.jsonl`
