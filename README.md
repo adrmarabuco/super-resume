@@ -16,13 +16,15 @@ A visual `/resume` for Claude Code. It opens a pane beside the chat that lists y
 ## What it shows
 
 **Session list (left)**
+- A tree, by default: each session under the one it came from, forked (`⎇`), continued after `/clear` (`↺`) or started by it (`»`); a branch worked on last on top. `v` turns it off for a flat list, newest first (kept across sessions)
 - Title, the same one `/resume` shows (one you set, or the one Claude Code gave it; else its first prompt)
 - How long ago it was last active
 - Its grade (A to E, `—` too short to judge, `?` format not recognised)
 - `◌` while background work it started never reported done, `•` on the session you are in now
 
 **Session report (right)**, each section can be turned off in settings (`s`)
-- Project, branch, model; the session id and its transcript path
+- Project, branch, model, effort, and how many times the context was compacted (`○`); the session id and its transcript path
+- **Tree**: the session it came from and how, the chain above it, and the sessions that came from it
 - When it started, when it last moved, active time of wall time
 - **Score**: the grade and three sub-scores, Flow, Autonomy and Delegation, plus Deliv (what got committed). See *Score* below.
 - **WIP**: the last recap Claude Code wrote of the session, and background work still running
@@ -53,6 +55,7 @@ Nothing leaves your machine and no model runs: the words are matched in what the
 | Key | |
 | --- | --- |
 | `b` `p` `a` | scope: this branch, this project (with its worktrees, as `/resume`), every project |
+| `v` | tree view on or off (on by default; kept across sessions) |
 | `l` | plans view |
 | `f` | find: search the messages of the scope (Esc leaves the field; `f` again back to the list) |
 | `s` | settings: sections on or off, export folder (kept across sessions) |
