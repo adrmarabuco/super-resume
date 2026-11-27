@@ -349,6 +349,8 @@ test('the report shows quality, agents, running work, tasks, plans and the recap
   await open($, on, { rich: rich() })
   const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /^ — {2}too short to score {2}h help$/ })).toBeDefined()
+  // the header counts compactions too
+  expect(await ui.find({ type: 'Text', text: /⎇ .* \| ○ 1 compaction$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^WIP › Making retries faster; tests still red\.$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /✗ 2 rejected \(1 with feedback\) \| ◌ 1 interrupts \| ! 1 tool errors \| ◐ 1 plan revisions \| \? 1 clarified \| ○ 1 compaction/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^feedback › add tests to the plan$/ })).toBeDefined()

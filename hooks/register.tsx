@@ -1463,6 +1463,9 @@ export const register: Register = on => {
           {s.effort !== '' && (
             <Text>{SEP}{effortMeter(T, s.effort)}</Text>
           )}
+          {s.quality.compactions > 0 && (
+            <Text>{SEP}<Text color="subtle">○ {atLeast}{s.quality.compactions} {s.quality.compactions === 1 ? 'compaction' : 'compactions'}</Text></Text>
+          )}
         </Text>,
         // what names this conversation from another one: its id and transcript (i copies both)
         <Text key="ref" wrap="truncate-end">
