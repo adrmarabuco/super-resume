@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Atom, EngineInterface as Engine, Register, RenderSurface } from 'claude-code'
 
-import type { GitInfo, ListMode, Listing, Panel, PlanRow, Scope, SearchEntry, SessionReport, Settings, TreeNode } from '../types'
+import type { GitInfo, ListMode, Listing, Panel, ParentVia, PlanRow, Scope, SearchEntry, SessionReport, Settings, TreeNode } from '../types'
 import {
   ago,
   bar,
@@ -9,6 +9,7 @@ import {
   fit,
   fitStart,
   fold,
+  treeOrder,
   matchesAll,
   searchTerms,
   snippetOf,
@@ -63,6 +64,9 @@ const selectedPlanAtom = atom({ plugin: 'super-resume', key: 'selectedPlan' } as
 // The search: what is typed, and the match the ▶ points at (`<session>:<n>`).
 const queryAtom = atom({ plugin: 'super-resume', key: 'query' } as const, '')
 const selectedMatchAtom = atom({ plugin: 'super-resume', key: 'selectedMatch' } as const, '')
+// The session list drawn as a tree of parents and the sessions that came from
+// them; on by default, kept across sessions in $.store.
+const treeViewAtom = atom({ plugin: 'super-resume', key: 'treeView' } as const, true)
 // The match Enter was pressed on, while the report asks what to do with it.
 const choiceAtom = atom({ plugin: 'super-resume', key: 'choice' } as const, '')
 // How far the report is scrolled, and for which session (or 'help'): picking
@@ -430,6 +434,7 @@ async function load($: Engine, scope: Scope): Promise<void> {
       title: report.title,
       endedAt: report.endedAt,
       parent: report.parent,
+      parentVia: report.parentVia,
     })
     for (const session of sessions) tree[session.id] = node(session)
     const byId = new Map(files.map(file => [file.id, file]))
@@ -567,6 +572,32 @@ async function select($: Engine, id: string): Promise<void> {
 async function loadSettings($: Engine): Promise<void> {
   const stored = (await $.store.get('settings').catch(() => undefined)) as Partial<Settings> | undefined
   await update($, settingsAtom, () => ({ ...DEFAULT_SETTINGS, ...(stored ?? {}) }))
+  const isTree = (await $.store.get('treeView').catch(() => undefined)) !== false
+  await update($, treeViewAtom, () => isTree)
+}
+
+async function toggleTree($: Engine): Promise<void> {
+  const isTree = !(await read($, treeViewAtom))
+  await update($, treeViewAtom, () => isTree)
+  await $.store.set('treeView', isTree).catch(() => undefined)
+  if ((await read($, listModeAtom)) !== 'sessions') await setListMode($, 'sessions')
+}
+
+// The marks of how a session came from its parent, in the tree and the report.
+const VIA_MARK: Record<ParentVia, string> = { '': '', fork: '⎇', clear: '↺', subprocess: '»' }
+const VIA_WORD: Record<ParentVia, string> = { '': 'from', fork: 'forked from', clear: 'continues', subprocess: 'started by' }
+
+// The list's sessions in the order drawn: as listed, or as the tree. Each
+// with the lines drawn before its title (the tree's alone).
+type ListedRow = { session: SessionReport; prefix: string; isChild: boolean }
+let lastOrder: { key: string; rows: ListedRow[] } | undefined
+function listedRows(sessions: SessionReport[], isTree: boolean): ListedRow[] {
+  if (!isTree) return sessions.map(session => ({ session, prefix: '', isChild: false }))
+  const key = sessions.map(session => `${session.id}<${session.parent}@${session.endedAt}`).join(',')
+  if (lastOrder?.key === key) return lastOrder.rows
+  const rows = treeOrder(sessions).map(row => ({ session: row.item, prefix: row.prefix, isChild: row.depth > 0 }))
+  lastOrder = { key, rows }
+  return rows
 }
 
 async function changeSettings($: Engine, change: (old: Settings) => Settings): Promise<void> {
@@ -800,7 +831,7 @@ async function move($: Engine, delta: number): Promise<void> {
       ? listing.plans.map(p => p.name)
       : mode === 'search'
         ? searchSessions(listing.sessions, await read($, queryAtom)).map(hit => hit.id)
-        : listing.sessions.map(s => s.id)
+        : listedRows(listing.sessions, await read($, treeViewAtom)).map(row => row.session.id)
   if (ids.length === 0) return
   const selected =
     mode === 'plans'
@@ -1009,7 +1040,8 @@ export const register: Register = on => {
       const from = ringAt.slice(prefix.length)
       const index = view.allIds.indexOf(from)
       // the header's buttons (scope, plans) sit above the list; anything else below it
-      const isAbove = element.startsWith('scope:') || element.startsWith('mode:') || element === 'search'
+      const isAbove =
+        element.startsWith('scope:') || element.startsWith('mode:') || element.startsWith('view:') || element === 'search'
       const isOut = !element.startsWith('setting:')
       // Leaving the list from a row it has more rows past: the ring only leaves
       // from the window's edge, or from a row it was sent to and not yet drawn.
@@ -1069,8 +1101,10 @@ export const register: Register = on => {
     // docked (45% at most) or narrow, the list sits above the report.
     const isSplit = e.props.placement === 'inline' && columns >= 80
     const sessions = listing.sessions
-    const selectedIndex = Math.max(0, sessions.findIndex(session => session.id === selectedId))
-    const selected = sessions[selectedIndex]
+    const isTree = await read($, treeViewAtom)
+    const listed = listedRows(sessions, isTree)
+    const selectedIndex = Math.max(0, listed.findIndex(row => row.session.id === selectedId))
+    const selected = listed[selectedIndex]?.session
     const plans = listing.plans
     const planIndex = Math.max(0, plans.findIndex(plan => plan.name === selectedPlanName))
     const selectedPlan = plans[planIndex]
@@ -1106,19 +1140,19 @@ export const register: Register = on => {
     if (activeIndex < start) start = activeIndex
     if (activeIndex >= start + slots) start = activeIndex - slots + 1
     start = Math.max(0, start)
-    const shownSessions = isPlans || isSearch ? [] : sessions.slice(start, start + slots)
+    const shownSessions = isPlans || isSearch ? [] : listed.slice(start, start + slots)
     const shownPlans = isPlans ? plans.slice(start, start + slots) : []
     const shownHits = isSearch ? hits.slice(start, start + slots) : []
     view.ids = isPlans
       ? shownPlans.map(plan => plan.name)
       : isSearch
         ? shownHits.map(hit => hit.id)
-        : shownSessions.map(session => session.id)
+        : shownSessions.map(row => row.session.id)
     view.allIds = isPlans
       ? plans.map(plan => plan.name)
       : isSearch
         ? hits.map(hit => hit.id)
-        : sessions.map(session => session.id)
+        : listed.map(row => row.session.id)
     view.prefix = prefix
     view.start = start
     view.listColumns = listOuter
@@ -1153,6 +1187,9 @@ export const register: Register = on => {
           >
             {isPlans ? <Text bold color="claude">● plans</Text> : <Text>plans</Text>}
           </Button>
+          <Button key="view:tree" hotkey="v" plain dimColor={!isTree} onPress={() => void toggleTree($)}>
+            {isTree ? <Text bold color="claude">● tree</Text> : <Text>tree</Text>}
+          </Button>
           <Button
             key="mode:search"
             hotkey="f"
@@ -1179,8 +1216,11 @@ export const register: Register = on => {
     // session. The context bar is the report's alone: in every row it was noise.
     const showBadge = show('badge') && show('score')
     const titleWidth = Math.max(4, listInner - 2 - 5 - 2 - (showBadge ? 4 : 0))
-    const row = (session: SessionReport) => {
+    const row = ({ session, prefix, isChild }: ListedRow) => {
       const isSelected = session.id === selected?.id
+      // under its parent, the tree's lines and how it came from it; a parent
+      // not in the list, the ↳ alone
+      const mark = isChild ? `${VIA_MARK[session.parentVia] || '·'} ` : session.parent !== '' ? '↳ ' : ''
       return (
         <Button
           key={`session:${session.id}`}
@@ -1189,9 +1229,10 @@ export const register: Register = on => {
           onPress={press => void choose($, session, press.surface)}
         >
           <Text color="claude">{isSelected ? '▶ ' : '  '}</Text>
-          {session.parent !== '' && <Text dimColor>↳ </Text>}
+          {prefix !== '' && <Text color="subtle">{prefix}</Text>}
+          {mark !== '' && <Text color={isChild ? 'merged' : undefined} dimColor={!isChild}>{mark}</Text>}
           <Text bold={isSelected} color={isSelected ? 'claude' : undefined}>
-            {fit(session.title, session.parent !== '' ? titleWidth - 2 : titleWidth)}
+            {fit(session.title, Math.max(4, titleWidth - prefix.length - mark.length))}
           </Text>
           <Text dimColor> {ago(session.endedAt, now).padStart(4)}</Text>
           {showBadge && <Text> </Text>}
@@ -1348,7 +1389,7 @@ export const register: Register = on => {
       if (session.parent !== '') {
         out.push(
           <Text key="tree:parent" wrap="truncate-end">
-            <Text dimColor>↳ </Text>
+            <Text dimColor>{VIA_MARK[session.parentVia] || '↳'} {VIA_WORD[session.parentVia]} </Text>
             <Text>{nameOf(session.parent)}</Text>
             {parent ? (
               <Text>{SEP}<Text dimColor>{ago(parent.endedAt, now)} ago</Text></Text>
@@ -1370,7 +1411,7 @@ export const register: Register = on => {
       if (forks.length > 0) {
         out.push(
           <Text key="tree:forks" wrap="truncate-end">
-            <Text dimColor>Forks </Text>
+            <Text dimColor>Children </Text>
             <Text>{forks.length}</Text>
             {forks.slice(0, 3).map(([id, node]) => (
               <Text key={`fork:${id}`}>{SEP}<Text dimColor>{fit(node.title, 28).trimEnd()}</Text></Text>

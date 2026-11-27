@@ -2,6 +2,7 @@ import type {
   Delegation,
   FileDiff,
   OpenWork,
+  ParentVia,
   PlanRef,
   Quality,
   SearchEntry,
@@ -55,6 +56,9 @@ type Line = {
   }
   toolUseResult?: unknown
   forkedFrom?: { sessionId?: string; messageUuid?: string }
+  // a `derived-from` record: the sessions this one came out of, and how
+  sessionId?: string
+  sessions?: { id?: string; via?: string }[]
 }
 
 type Usage = {
@@ -158,6 +162,76 @@ export const parseAgentMeta = (text: string): { depth: number; finished: boolean
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
 // Rows Claude Code writes as user messages that the person never typed.
+/**
+ * The direct parent in a `derived-from` record. Its `sessions` carry the
+ * lineage down to this session (a fork of a fork lists both), and also the
+ * session's own resumes and compactions, which name no parent. So: the last
+ * other session it was forked or /cleared from, else the last that started it.
+ */
+export const derivedParent = (
+  self: string,
+  sessions: { id?: string; via?: string }[] | undefined,
+): { id: string; via: ParentVia } | undefined => {
+  const others = (Array.isArray(sessions) ? sessions : []).filter(
+    (s): s is { id: string; via: string } => typeof s?.id === 'string' && s.id !== self && typeof s.via === 'string',
+  )
+  const branch = others.filter(s => s.via === 'fork' || s.via === 'clear').at(-1)
+  if (branch) return { id: branch.id, via: branch.via as ParentVia }
+  const started = others.filter(s => s.via === 'subprocess').at(-1)
+  return started ? { id: started.id, via: 'subprocess' } : undefined
+}
+
+/** A row of the tree view: the session, the lines drawn before it, how it came from its parent. */
+export type TreeRow<T> = { item: T; prefix: string; depth: number }
+
+/**
+ * The sessions as a tree, as `git log --graph` draws one: each under the
+ * listed session it came from, with `├─ │ └─` before it. Roots and siblings
+ * go newest first by the latest activity anywhere under them, so the branch
+ * worked on last is on top. One whose parent is not listed is a root.
+ */
+export const treeOrder = <T extends { id: string; parent: string; endedAt: string }>(items: T[]): TreeRow<T>[] => {
+  const byId = new Map(items.map(item => [item.id, item]))
+  const children = new Map<string, T[]>()
+  const roots: T[] = []
+  for (const item of items) {
+    const parent = item.parent !== '' && item.parent !== item.id ? byId.get(item.parent) : undefined
+    if (parent) children.set(parent.id, [...(children.get(parent.id) ?? []), item])
+    else roots.push(item)
+  }
+  const latest = new Map<string, string>()
+  const latestOf = (item: T, seen: Set<string>): string => {
+    const known = latest.get(item.id)
+    if (known !== undefined) return known
+    if (seen.has(item.id)) return item.endedAt
+    seen.add(item.id)
+    let at = item.endedAt
+    for (const child of children.get(item.id) ?? []) {
+      const sub = latestOf(child, seen)
+      if (sub > at) at = sub
+    }
+    latest.set(item.id, at)
+    return at
+  }
+  const newestFirst = (list: T[]) => [...list].sort((a, b) => latestOf(b, new Set()).localeCompare(latestOf(a, new Set())))
+
+  const rows: TreeRow<T>[] = []
+  const placed = new Set<string>()
+  const walk = (item: T, lead: string, own: string, depth: number) => {
+    if (placed.has(item.id)) return
+    placed.add(item.id)
+    rows.push({ item, prefix: lead + own, depth })
+    const kids = newestFirst(children.get(item.id) ?? [])
+    // past a few levels the lines stop growing: the title keeps its room
+    const next = depth === 0 ? '' : depth >= 6 ? lead : lead + (own === '└─' ? '  ' : '│ ')
+    kids.forEach((kid, i) => walk(kid, next, i === kids.length - 1 ? '└─' : '├─', depth + 1))
+  }
+  for (const root of newestFirst(roots)) walk(root, '', '', 0)
+  // a loop of parents leaves its sessions unplaced: they stand as roots
+  for (const item of items) if (!placed.has(item.id)) walk(item, '', '', 0)
+  return rows
+}
+
 const isNoise = (text: string): boolean =>
   /^\s*(<command-|<local-command|<system-reminder|<bash-(input|stdout|stderr)|<task-notification|Caveat:|\[Request interrupted)/.test(
     text,
@@ -417,6 +491,9 @@ export const parseTranscript = (
   let toolCalls = 0
   let contextTokens = 0
   let parent = ''
+  let parentVia: ParentVia = ''
+  // what the session's first own `derived-from` record says it came from
+  let derived: { id: string; via: ParentVia } | undefined
   let aiTitle = ''
   let inheritedFirst = ''
   let activeMs = 0
@@ -475,6 +552,9 @@ export const parseTranscript = (
     if (line.type === 'custom-title' && line.customTitle) customTitle = line.customTitle
     // a fork's copy of its parent's title names the parent, not this session
     if (line.type === 'ai-title' && line.aiTitle && line.forkedFrom === undefined) aiTitle = line.aiTitle
+    if (line.type === 'derived-from' && derived === undefined && (line.sessionId === undefined || line.sessionId === id)) {
+      derived = derivedParent(id, line.sessions)
+    }
     if (line.isSidechain) continue
     const beforeUuid = lastUuid
     if ((line.type === 'user' || line.type === 'assistant') && typeof line.uuid === 'string') lastUuid = line.uuid
@@ -484,6 +564,7 @@ export const parseTranscript = (
     const isInherited = line.forkedFrom !== undefined
     if (isInherited && typeof line.forkedFrom?.sessionId === 'string' && line.forkedFrom.sessionId !== id) {
       parent = line.forkedFrom.sessionId
+      parentVia = 'fork'
     }
     if (line.timestamp) {
       if (!isInherited && startedAt === '') startedAt = line.timestamp
@@ -680,6 +761,11 @@ export const parseTranscript = (
 
   closeTurn(lastUuid)
   if (turns === 0 && lastReply === '') return undefined
+  // a fork's own lines name its parent; else the record of where it came from
+  if (parent === '' && derived) {
+    parent = derived.id
+    parentVia = derived.via
+  }
   // A fork with nothing of its own yet starts where its copy ends.
   if (startedAt === '') startedAt = endedAt
 
@@ -723,6 +809,7 @@ export const parseTranscript = (
       80,
     ),
     parent,
+    parentVia,
     firstPrompt: clipText(firstPrompt, 800),
     lastPrompt: clipText(lastPrompt, 800),
     // the reply's end, enough for the report to scroll through; cut at a word

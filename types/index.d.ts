@@ -5,8 +5,10 @@ export type SessionReport = {
   /** The transcript this report was read from. */
   transcript: string
   title: string
-  /** The session this one was forked from (its `forkedFrom`), or ''. */
+  /** The session this one came from (a fork's, a /clear's, the one that ran it), or ''. */
   parent: string
+  /** How it came from `parent`: forked, continued after /clear, or started by it. */
+  parentVia: ParentVia
   firstPrompt: string
   lastPrompt: string
   lastReply: string
@@ -133,7 +135,9 @@ export type PlanRef = {
   isPartial: boolean
 }
 
-export type TreeNode = { title: string; endedAt: string; parent: string }
+export type ParentVia = '' | 'fork' | 'clear' | 'subprocess'
+
+export type TreeNode = { title: string; endedAt: string; parent: string; parentVia: ParentVia }
 
 export type FileDiff = { path: string; added: number; removed: number }
 

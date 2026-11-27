@@ -183,6 +183,43 @@ test('project scope lists the sessions of its worktrees, live and removed', asyn
   await ui.unmount()
 })
 
+test('the list opens as a tree unless it was turned off in an earlier session', async ($, on) => {
+  const store: Record<string, unknown> = {}
+  on('store.get', (_, e) => ({ value: store[e.key] }))
+  on('store.set', (_, e) => {
+    store[e.key] = e.value
+    return { value: undefined }
+  })
+  on('command.register', () => ({ value: { command: 'super-resume' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.focus', () => ({ value: {} }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.id', () => ({ value: 'current' }))
+  on('session.version', () => ({ value: { version: '2.1.329', base: '2.1.329' } }))
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('fs.list', (_, e) => ({
+    value: posix(e.path) === `${BASE}/${FOLDER}` ? [{ name: 'aaa.jsonl', kind: 'file', size: 2000, mtimeMs: 1, isLink: false }] : [],
+  }))
+  on('fs.read', () => ({ value: transcript('the retry logic', 'Done.', 'main', 1000) }))
+
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'super-resume', args: 'branch', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^● tree$/ })).toBeDefined()
+
+  await ui.press({ key: 'view:tree' })
+  for (let i = 0; i < 300; i++) await Promise.resolve()
+  expect(store.treeView).toBe(false)
+  await ui.unmount()
+
+  await $.command.run({ command: 'super-resume', args: 'branch', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^● tree$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('a transcript over the 4 MiB a read may answer is read in ranges, not dropped', async ($, on) => {
   const MIB4 = 4 * 1024 * 1024
   // ASCII, so a byte is a character: ~6 MB, the reply at its end
@@ -759,6 +796,8 @@ test('a fork names its parent and chain, its parent counts its forks, and inheri
     user('leaf prompt', 'main'), said('l1', 'leaf reply', 'main')].join('\n')
   const T: Record<string, string> = { root: rootT, mid: midT, leaf: leafT }
 
+  // the flat list (turned off in an earlier session): leaf first, as listed
+  on('store.get', (_, e) => ({ value: e.key === 'treeView' ? false : undefined }))
   on('command.register', () => ({ value: { command: 'super-resume' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.focus', () => ({ value: {} }))
@@ -783,7 +822,7 @@ test('a fork names its parent and chain, its parent counts its forks, and inheri
   const ui = await $.ui.mount({ ...INLINE, props: { ...INLINE.props, scroll: { offset: 0, bodyRows: 36 } }, surface: 'terminal' })
 
   // leaf is selected (most recent): parent mid, chain root › mid › this
-  expect(await ui.find({ type: 'Text', text: /^↳ Mid work \| \d+\w ago$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^⎇ forked from Mid work \| \d+\w ago$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Chain Root work › Mid work › this$/ })).toBeDefined()
   // the fork mark: on the leaf's row and on its report title, not on root-less rows
   expect(await ui.find({ type: 'Button', text: /^▶ ↳ Leaf work/ })).toBeDefined()
@@ -797,8 +836,8 @@ test('a fork names its parent and chain, its parent counts its forks, and inheri
   // mid: one fork (leaf), parent root
   await $.ui.scroll({ component: 'Pane', requestId: 'super-resume', offset: 0, by: 1, bodyRows: 36, contentRows: 36, origin: { kind: 'person' } } as any)
   for (let i = 0; i < 300; i++) await Promise.resolve()
-  expect(await ui.find({ type: 'Text', text: /^Forks 1 \| Leaf work$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^↳ Root work/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Children 1 \| Leaf work$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^⎇ forked from Root work/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Chain/ })).toBeUndefined()
   await ui.unmount()
 })
